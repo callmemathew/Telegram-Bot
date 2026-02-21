@@ -44,7 +44,6 @@ func MustNew(ctx context.Context, cfg config.Config) *App {
 func setupCommands(ctx context.Context, bot *telego.Bot) error {
 	cmds := []telego.BotCommand{
 		{Command: "start", Description: "Start bot"},
-		{Command: "stop", Description: "Stop / reset"},
 		{Command: "lang", Description: "Change language"},
 	}
 	if err := setupCommands(ctx, bot); err != nil {

@@ -57,10 +57,12 @@ func (s *SupportService) GetLang(ctx context.Context, userID int64) (string, boo
 	return s.store.GetLangByUserID(ctx, userID)
 }
 
+// =========================
 // RefreshLangUI (после SetLang):
 // - topic title (если есть thread)
 // - pinned card (если есть pinned_msg_id)
-// - status bar (если есть status msg) в зависимости от waiting/active
+// =========================
+
 func (s *SupportService) RefreshLangUI(ctx context.Context, userID int64) error {
 	u, err := s.store.GetUserByUserID(ctx, userID)
 	if err != nil {
@@ -107,86 +109,6 @@ func (s *SupportService) RefreshLangUI(ctx context.Context, userID int64) error 
 }
 
 // =========================
-// STOP / CLOSE
-// =========================
-
-func (s *SupportService) StopSession(ctx context.Context, userID int64) error {
-	if err := s.store.CloseSession(ctx, userID); err != nil {
-		return err
-	}
-
-	// обновим pinned card если есть (чтобы статус стал CLOSED)
-	u, err := s.store.GetUserByUserID(ctx, userID)
-	if err != nil {
-		return nil
-	}
-
-	lang := "RU"
-	if l, ok, _ := s.store.GetLangByUserID(ctx, userID); ok && strings.TrimSpace(l) != "" {
-		lang = normLang(l)
-	}
-
-	ss, okS, _ := s.store.GetSessionByUserID(ctx, userID)
-	if okS {
-		_ = s.UpsertPinnedCard(ctx, u, ss, lang, sessionManagerName(ss))
-	}
-	return nil
-}
-
-// =========================
-// STATUS BAR (USER CHAT) — 1 message, edit it
-// =========================
-
-func (s *SupportService) UpsertUserStatusBarText(ctx context.Context, userID int64, chatID int64, text string) error {
-	msgID, ok, err := s.store.GetStatusMsgID(ctx, userID)
-	if err != nil {
-		return err
-	}
-
-	// edit existing
-	if ok && msgID != 0 {
-		_, err := s.bot.EditMessageText(ctx, &telego.EditMessageTextParams{
-			ChatID:    telegoutil.ID(chatID),
-			MessageID: msgID,
-			Text:      text,
-		})
-		if err != nil && strings.Contains(err.Error(), "message is not modified") {
-			return nil
-		}
-		return err
-	}
-
-	// send once + save id
-	sent, err := s.bot.SendMessage(ctx, telegoutil.Message(telegoutil.ID(chatID), text))
-	if err != nil {
-		return err
-	}
-	return s.store.SetStatusMsgID(ctx, userID, sent.MessageID)
-}
-
-func isMessageNotModified(err error) bool {
-	if err == nil {
-		return false
-	}
-	return strings.Contains(err.Error(), "message is not modified")
-}
-
-// удобный вызов: пересчитать текст бара по текущей сессии (без параметров)
-func (s *SupportService) UpsertUserStatusBarAuto(ctx context.Context, userID int64, chatID int64) error {
-	lang := "RU"
-	if l, ok, _ := s.store.GetLangByUserID(ctx, userID); ok && strings.TrimSpace(l) != "" {
-		lang = normLang(l)
-	}
-
-	ss, okS, _ := s.store.GetSessionByUserID(ctx, userID)
-	if okS {
-		mn := sessionManagerName(ss)
-		return s.UpsertUserStatusBarText(ctx, userID, chatID, statusText(lang, ss.Status, mn))
-	}
-	return s.UpsertUserStatusBarText(ctx, userID, chatID, statusText(lang, storage.SessionWaiting, ""))
-}
-
-// =========================
 // PIN CARD (MANAGER TOPIC) — 1 message, edit it + pin once
 // =========================
 
@@ -197,7 +119,6 @@ func (s *SupportService) UpsertPinnedCard(
 	lang string,
 	managerName string,
 ) error {
-
 	lang = normLang(lang)
 
 	if !user.ThreadID.Valid || user.ThreadID.Int64 == 0 {
@@ -205,34 +126,24 @@ func (s *SupportService) UpsertPinnedCard(
 	}
 	threadID := int(user.ThreadID.Int64)
 
-	statusLabel := strings.ToUpper(string(ss.Status))
-	if statusLabel == "" {
-		statusLabel = "WAITING"
-	}
-
 	card := fmt.Sprintf(
 		"📌 *LIVE SUPPORT SESSION*\n"+
 			"👤 *User:* %s\n"+
 			"🆔 *user_id:* `%d`\n"+
 			"🌍 *Lang:* %s %s\n"+
-			"📡 *Status:* `%s`\n"+
 			"💼 *Manager:* %s\n",
 		displayUser(user),
 		user.UserID,
 		langEmoji(lang), lang,
-		statusLabel,
 		prettyManager(managerName),
 	)
 
-	// 🔎 Проверяем есть ли pinned id
 	pid, hasPin, err := s.store.GetPinnedMsgID(ctx, user.UserID)
 	if err != nil {
 		return err
 	}
 
-	// =====================================================
-	// 1️⃣ Если pinned_msg_id есть → всегда редактируем
-	// =====================================================
+	// 1) если уже есть pinned_msg_id -> редактируем
 	if hasPin && pid != 0 {
 		_, err := s.bot.EditMessageText(ctx, &telego.EditMessageTextParams{
 			ChatID:    telegoutil.ID(s.managersChatID),
@@ -240,25 +151,19 @@ func (s *SupportService) UpsertPinnedCard(
 			Text:      card,
 			ParseMode: "Markdown",
 		})
-
-		// игнорируем "not modified"
 		if err != nil && !strings.Contains(err.Error(), "message is not modified") {
 			return err
 		}
 
-		// 🔒 убедимся что закреплено
 		_ = s.bot.PinChatMessage(ctx, &telego.PinChatMessageParams{
 			ChatID:              telegoutil.ID(s.managersChatID),
 			MessageID:           pid,
 			DisableNotification: true,
 		})
-
 		return nil
 	}
 
-	// =====================================================
-	// 2️⃣ Если pinned_msg_id нет → создаём и сохраняем
-	// =====================================================
+	// 2) иначе -> создаём pinned card
 	msg := telegoutil.Message(telegoutil.ID(s.managersChatID), card)
 	msg.ParseMode = "Markdown"
 	msg.MessageThreadID = threadID
@@ -268,12 +173,10 @@ func (s *SupportService) UpsertPinnedCard(
 		return err
 	}
 
-	// сохраняем message_id
 	if err := s.store.SetPinnedMsgID(ctx, user.UserID, sent.MessageID); err != nil {
 		return err
 	}
 
-	// закрепляем
 	_ = s.bot.PinChatMessage(ctx, &telego.PinChatMessageParams{
 		ChatID:              telegoutil.ID(s.managersChatID),
 		MessageID:           sent.MessageID,
@@ -285,8 +188,6 @@ func (s *SupportService) UpsertPinnedCard(
 
 // =========================
 // USER -> MANAGERS
-//  - TEXT: 1 message
-//  - ATTACH: (optional header) + CopyMessage
 // =========================
 
 func (s *SupportService) OnUserMessage(ctx context.Context, m *telego.Message) error {
@@ -308,6 +209,11 @@ func (s *SupportService) OnUserMessage(ctx context.Context, m *telego.Message) e
 	// ensure user row
 	_ = s.EnsureUser(ctx, user, m.Chat.ID)
 
+	// НЕ пересылаем команды менеджерам
+	if strings.HasPrefix(strings.TrimSpace(m.Text), "/") {
+		return nil
+	}
+
 	// ensure thread
 	threadID, hasThread, err := s.store.GetThreadByUserID(ctx, user.ID)
 	if err != nil {
@@ -326,19 +232,9 @@ func (s *SupportService) OnUserMessage(ctx context.Context, m *telego.Message) e
 		_ = s.store.SetThreadID(ctx, user.ID, threadID)
 	}
 
-	// ensure session exists
-	ss, okS, err := s.store.GetSessionByUserID(ctx, user.ID)
-	if err != nil {
-		return err
-	}
-	if !okS {
+	// ensure session exists (для pinned/manager info)
+	if _, okS, _ := s.store.GetSessionByUserID(ctx, user.ID); !okS {
 		_ = s.store.UpsertSessionWaiting(ctx, user.ID, threadID, 0)
-		ss, _, _ = s.store.GetSessionByUserID(ctx, user.ID)
-	}
-
-	// if CLOSED -> reset to WAITING (so managers can connect again)
-	if ss.Status == storage.SessionClosed {
-		_ = s.store.ResetSessionToWaiting(ctx, user.ID, threadID)
 	}
 
 	// send to managers
@@ -349,7 +245,6 @@ func (s *SupportService) OnUserMessage(ctx context.Context, m *telego.Message) e
 		}
 
 		out := fmt.Sprintf("👤 %s | %s %s\n💬 %s", topicTitle(user), langEmoji(lang), lang, text)
-
 		msg := telegoutil.Message(telegoutil.ID(s.managersChatID), out)
 		msg.MessageThreadID = threadID
 		_, err := s.bot.SendMessage(ctx, msg)
@@ -376,35 +271,8 @@ func (s *SupportService) OnUserMessage(ctx context.Context, m *telego.Message) e
 	return err
 }
 
-func (s *SupportService) TouchWaiting(ctx context.Context, userID int64) error {
-	u, err := s.store.GetUserByUserID(ctx, userID)
-	if err != nil {
-		return err
-	}
-
-	lang := "RU"
-	if l, ok, _ := s.store.GetLangByUserID(ctx, userID); ok && strings.TrimSpace(l) != "" {
-		lang = normLang(l)
-	}
-
-	// если тред есть — reset waiting (чтобы closed точно ушёл)
-	if u.ThreadID.Valid && u.ThreadID.Int64 != 0 {
-		_ = s.store.ResetSessionToWaiting(ctx, userID, int(u.ThreadID.Int64))
-	}
-
-	// бар НЕ создаём, если его нет
-	_, hasBar, _ := s.store.GetStatusMsgID(ctx, userID)
-	if hasBar {
-		return s.UpsertUserStatusBarText(ctx, userID, u.ChatID, statusText(lang, storage.SessionWaiting, ""))
-	}
-	return nil
-}
-
 // =========================
 // MANAGER -> USER
-//  - /ready OR first reply activates session
-//  - TEXT: 1 message
-//  - ATTACH: (optional header) + CopyMessage
 // =========================
 
 func (s *SupportService) OnManagerReply(ctx context.Context, m *telego.Message) error {
@@ -418,11 +286,12 @@ func (s *SupportService) OnManagerReply(ctx context.Context, m *telego.Message) 
 		return err
 	}
 
-	// lang
+	// lang (можно не использовать, но оставим для будущего)
 	lang := "RU"
 	if l, ok, _ := s.store.GetLangByUserID(ctx, u.UserID); ok && strings.TrimSpace(l) != "" {
 		lang = normLang(l)
 	}
+	_ = lang
 
 	managerName := buildManagerName(m.From)
 
@@ -439,28 +308,21 @@ func (s *SupportService) OnManagerReply(ctx context.Context, m *telego.Message) 
 
 	// activate on /ready OR first normal reply OR attachment
 	shouldActivate := false
-	if ss.Status != storage.SessionActive {
-		if isReadyCmd {
-			shouldActivate = true
-		} else if hasAtt {
-			shouldActivate = true
-		} else if txt != "" && !strings.HasPrefix(txt, "/") {
+	if strings.TrimSpace(sessionManagerName(ss)) == "" {
+		if isReadyCmd || hasAtt || (txt != "" && !strings.HasPrefix(txt, "/")) {
 			shouldActivate = true
 		}
 	}
 
 	if shouldActivate {
-		// make sure pinned exists/updated
 		_ = s.UpsertPinnedCard(ctx, u, ss, lang, managerName)
 
-		// read pinned id
 		pid, okP, _ := s.store.GetPinnedMsgID(ctx, u.UserID)
 		var pinnedMsgID int64
 		if okP && pid != 0 {
 			pinnedMsgID = int64(pid)
 		}
 
-		// activate session
 		manager := storage.User{
 			UserID:    m.From.ID,
 			Username:  toNullString(m.From.Username),
@@ -469,7 +331,6 @@ func (s *SupportService) OnManagerReply(ctx context.Context, m *telego.Message) 
 		}
 		_ = s.store.ActivateSession(ctx, u.UserID, manager, pinnedMsgID)
 
-		// reload + update pinned (ACTIVE)
 		ss, _, _ = s.store.GetSessionByUserID(ctx, u.UserID)
 		_ = s.UpsertPinnedCard(ctx, u, ss, lang, managerName)
 
@@ -478,7 +339,7 @@ func (s *SupportService) OnManagerReply(ctx context.Context, m *telego.Message) 
 		}
 	}
 
-	// ✅ USER CHAT OUTPUT (clean)
+	// USER CHAT OUTPUT
 	if !hasAtt {
 		if txt == "" || strings.HasPrefix(txt, "/") {
 			return nil
@@ -506,81 +367,32 @@ func (s *SupportService) OnManagerReply(ctx context.Context, m *telego.Message) 
 	return err
 }
 
-func (s *SupportService) StartSession(ctx context.Context, userID int64, chatID int64) error {
-	// 0) Ensure user (на всякий)
-	_ = s.store.EnsureUser(ctx, storage.User{UserID: userID, ChatID: chatID})
-
-	// 1) язык должен быть
-	lang := "RU"
-	if l, ok, _ := s.store.GetLangByUserID(ctx, userID); ok && strings.TrimSpace(l) != "" {
-		lang = normLang(l)
-	}
-
-	// 2) threadID если есть — ок (если нет, будет создан при первом сообщении юзера)
-	threadID, okT, _ := s.store.GetThreadByUserID(ctx, userID)
-	if !okT {
-		threadID = 0
-	}
-
-	// 3) СЕССИЯ -> WAITING (важно: сбрасываем closed/active)
-	_ = s.store.ResetSessionToWaiting(ctx, userID, threadID)
-
-	// 4) БАР: должен стать WAITING
-	// если бара нет — создаём один раз
-	if _, hasBar, _ := s.store.GetStatusMsgID(ctx, userID); !hasBar {
-		return s.UpsertUserStatusBarText(ctx, userID, chatID, statusText(lang, storage.SessionWaiting, ""))
-	}
-
-	// если бар есть — просто редактируем в WAITING
-	return s.UpsertUserStatusBarText(ctx, userID, chatID, statusText(lang, storage.SessionWaiting, ""))
-}
-
-func (s *SupportService) BindStatusBarToMessage(
-	ctx context.Context,
-	userID int64,
-	chatID int64,
-	msgID int,
-	lang string,
-) error {
-	// 1) store msgID as status-bar id
-	if err := s.store.SetStatusMsgID(ctx, userID, msgID); err != nil {
-		return err
-	}
-
-	lang = normLang(lang)
-
-	// 2) detect current session state
-	ss, ok, err := s.store.GetSessionByUserID(ctx, userID)
-	if err != nil {
-		return err
-	}
-
-	state := storage.SessionWaiting
-	managerName := ""
-
-	if ok {
-		state = ss.Status
-		managerName = sessionManagerName(ss)
-	}
-
-	barText := statusText(lang, state, managerName)
-
-	// 3) edit THIS message text (turn menu msg -> bar msg)
-	_, err = s.bot.EditMessageText(ctx, &telego.EditMessageTextParams{
-		ChatID:    telegoutil.ID(chatID),
-		MessageID: msgID,
-		Text:      barText,
-	})
-
-	if isMessageNotModified(err) {
-		return nil
-	}
-	return err
-}
-
 // =========================
 // helpers
 // =========================
+func buildManagerName(u *telego.User) string {
+	if u == nil {
+		return "Support manager"
+	}
+	first := strings.TrimSpace(u.FirstName)
+	last := strings.TrimSpace(u.LastName)
+	if first != "" && last != "" {
+		return first + " " + last
+	}
+	if first != "" {
+		return first
+	}
+	if strings.TrimSpace(u.Username) != "" {
+		return "@" + strings.TrimSpace(u.Username)
+	}
+	return "Support manager"
+}
+func isMessageNotModified(err error) bool {
+	if err == nil {
+		return false
+	}
+	return strings.Contains(err.Error(), "message is not modified")
+}
 
 func hasAttachment(m *telego.Message) bool {
 	if m == nil {
@@ -593,6 +405,78 @@ func hasAttachment(m *telego.Message) bool {
 		m.VideoNote != nil ||
 		m.Audio != nil ||
 		m.Animation != nil
+}
+
+func topicTitle(u *telego.User) string {
+	if u == nil {
+		return "Unknown"
+	}
+	if strings.TrimSpace(u.Username) != "" {
+		return "@" + strings.TrimSpace(u.Username)
+	}
+	full := strings.TrimSpace(strings.TrimSpace(u.FirstName) + " " + strings.TrimSpace(u.LastName))
+	if full != "" {
+		return full
+	}
+	return fmt.Sprintf("id%d", u.ID)
+}
+
+func displayUser(u storage.User) string {
+	if u.Username.Valid && strings.TrimSpace(u.Username.String) != "" {
+		return "@" + strings.TrimSpace(u.Username.String)
+	}
+	fn := ""
+	ln := ""
+	if u.FirstName.Valid {
+		fn = strings.TrimSpace(u.FirstName.String)
+	}
+	if u.LastName.Valid {
+		ln = strings.TrimSpace(u.LastName.String)
+	}
+	full := strings.TrimSpace(fn + " " + ln)
+	if full != "" {
+		return full
+	}
+	return fmt.Sprintf("id%d", u.UserID)
+}
+
+func prettyManager(name string) string {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return "—"
+	}
+	return name
+}
+
+func langEmoji(lang string) string {
+	switch normLang(lang) {
+	case "UA":
+		return "🇺🇦"
+	case "EN":
+		return "🇬🇧"
+	default:
+		return "🇷🇺"
+	}
+}
+
+func sessionManagerName(ss storage.SupportSession) string {
+	// prefer username if present
+	if ss.ManagerUser.Valid && strings.TrimSpace(ss.ManagerUser.String) != "" {
+		return "@" + strings.TrimSpace(ss.ManagerUser.String)
+	}
+	fn := ""
+	ln := ""
+	if ss.ManagerFirst.Valid {
+		fn = strings.TrimSpace(ss.ManagerFirst.String)
+	}
+	if ss.ManagerLast.Valid {
+		ln = strings.TrimSpace(ss.ManagerLast.String)
+	}
+	full := strings.TrimSpace(fn + " " + ln)
+	if full != "" {
+		return full
+	}
+	return ""
 }
 
 func attachmentText(lang string, m *telego.Message) string {
@@ -652,171 +536,7 @@ func attachmentText(lang string, m *telego.Message) string {
 	}
 }
 
-func statusText(lang string, st storage.SessionStatus, managerName string) string {
-	lang = normLang(lang)
-
-	switch st {
-	case storage.SessionActive:
-		switch lang {
-		case "UA":
-			return fmt.Sprintf("✅ Менеджер підключився: %s\nПишіть повідомлення — це живий чат.", prettyManager(managerName))
-		case "EN":
-			return fmt.Sprintf("✅ Manager connected: %s\nYou can message here — live chat.", prettyManager(managerName))
-		default:
-			return fmt.Sprintf("✅ Менеджер подключился: %s\nПиши сюда — это живой чат.", prettyManager(managerName))
-		}
-
-	case storage.SessionClosed:
-		switch lang {
-		case "UA":
-			return "⛔ Діалог завершено. Щоб почати знову — /start"
-		case "EN":
-			return "⛔ Dialog closed. To start again — /start"
-		default:
-			return "⛔ Диалог завершён. Чтобы начать заново — /start"
-		}
-
-	default: // waiting
-		switch lang {
-		case "UA":
-			return "⏳ Підключаємо менеджера…\nЗазвичай до 1 хв."
-		case "EN":
-			return "⏳ Connecting a manager…\nUsually up to 1 minute."
-		default:
-			return "⏳ Подключаем менеджера…\nОбычно до 1 минуты."
-		}
-	}
-}
-
-func topicTitle(u *telego.User) string {
-	if u == nil {
-		return "Unknown"
-	}
-	if strings.TrimSpace(u.Username) != "" {
-		return "@" + strings.TrimSpace(u.Username)
-	}
-	full := strings.TrimSpace(strings.TrimSpace(u.FirstName) + " " + strings.TrimSpace(u.LastName))
-	if full != "" {
-		return full
-	}
-	return fmt.Sprintf("id%d", u.ID)
-}
-
-func displayUser(u storage.User) string {
-	if u.Username.Valid && strings.TrimSpace(u.Username.String) != "" {
-		return "@" + strings.TrimSpace(u.Username.String)
-	}
-	fn := ""
-	ln := ""
-	if u.FirstName.Valid {
-		fn = strings.TrimSpace(u.FirstName.String)
-	}
-	if u.LastName.Valid {
-		ln = strings.TrimSpace(u.LastName.String)
-	}
-	full := strings.TrimSpace(fn + " " + ln)
-	if full != "" {
-		return full
-	}
-	return fmt.Sprintf("id%d", u.UserID)
-}
-
-func buildManagerName(u *telego.User) string {
-	if u == nil {
-		return "Support manager"
-	}
-	first := strings.TrimSpace(u.FirstName)
-	last := strings.TrimSpace(u.LastName)
-	if first != "" && last != "" {
-		return first + " " + last
-	}
-	if first != "" {
-		return first
-	}
-	if strings.TrimSpace(u.Username) != "" {
-		return "@" + strings.TrimSpace(u.Username)
-	}
-	return "Support manager"
-}
-
-func sessionManagerName(ss storage.SupportSession) string {
-	// prefer username if present
-	if ss.ManagerUser.Valid && strings.TrimSpace(ss.ManagerUser.String) != "" {
-		return "@" + strings.TrimSpace(ss.ManagerUser.String)
-	}
-	fn := ""
-	ln := ""
-	if ss.ManagerFirst.Valid {
-		fn = strings.TrimSpace(ss.ManagerFirst.String)
-	}
-	if ss.ManagerLast.Valid {
-		ln = strings.TrimSpace(ss.ManagerLast.String)
-	}
-	full := strings.TrimSpace(fn + " " + ln)
-	if full != "" {
-		return full
-	}
-	return ""
-}
-
-func (s *SupportService) OpenLangMenu(ctx context.Context, userID, chatID int64) error {
-	// гарантируем запись юзера
-	_ = s.store.EnsureUser(ctx, storage.User{UserID: userID, ChatID: chatID})
-
-	kb := telegoutil.InlineKeyboard(
-		telegoutil.InlineKeyboardRow(
-			telegoutil.InlineKeyboardButton("Русский").WithCallbackData("lang:RU"),
-			telegoutil.InlineKeyboardButton("Українська").WithCallbackData("lang:UA"),
-			telegoutil.InlineKeyboardButton("English").WithCallbackData("lang:EN"),
-		),
-	)
-
-	// если бар уже есть -> редактируем его и показываем клаву
-	mid, ok, _ := s.store.GetStatusMsgID(ctx, userID)
-	if ok && mid != 0 {
-		_, err := s.bot.EditMessageText(ctx, &telego.EditMessageTextParams{
-			ChatID:      telegoutil.ID(chatID),
-			MessageID:   mid,
-			Text:        "🌍 Выберите язык / Оберіть мову / Choose language:",
-			ReplyMarkup: kb, // telego позволяет
-		})
-		if isMessageNotModified(err) {
-			return nil
-		}
-		return err
-	}
-
-	// иначе -> отправим одно сообщение и СРАЗУ привяжем как бар
-	msg := telegoutil.Message(telegoutil.ID(chatID), "🌍 Выберите язык / Оберіть мову / Choose language:")
-	msg.ReplyMarkup = kb
-
-	sent, err := s.bot.SendMessage(ctx, msg)
-	if err != nil {
-		return err
-	}
-
-	// привязали message_id к user_header_msg
-	return s.store.SetStatusMsgID(ctx, userID, sent.MessageID)
-}
-
-func prettyManager(name string) string {
-	name = strings.TrimSpace(name)
-	if name == "" {
-		return "—"
-	}
-	return name
-}
-
-func langEmoji(lang string) string {
-	switch normLang(lang) {
-	case "UA":
-		return "🇺🇦"
-	case "EN":
-		return "🇬🇧"
-	default:
-		return "🇷🇺"
-	}
-}
+// ---------- shared helpers ----------
 
 func normLang(lang string) string {
 	lang = strings.ToUpper(strings.TrimSpace(lang))
