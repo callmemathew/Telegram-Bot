@@ -22,16 +22,9 @@ type User struct {
 
 type SessionStatus string
 
-const (
-	SessionWaiting SessionStatus = "waiting"
-	SessionActive  SessionStatus = "active"
-	SessionClosed  SessionStatus = "closed"
-)
-
 type SupportSession struct {
 	UserID        int64
 	ThreadID      int64
-	Status        SessionStatus
 	ManagerID     sql.NullInt64
 	ManagerFirst  sql.NullString
 	ManagerLast   sql.NullString
@@ -82,7 +75,6 @@ CREATE INDEX IF NOT EXISTS idx_users_thread_id ON users(thread_id);
 CREATE TABLE IF NOT EXISTS support_sessions (
   user_id          INTEGER PRIMARY KEY,
   thread_id        INTEGER NOT NULL DEFAULT 0,
-  status           TEXT NOT NULL DEFAULT 'waiting',
   manager_id       INTEGER,
   manager_first    TEXT,
   manager_last     TEXT,
@@ -267,18 +259,18 @@ ON CONFLICT(user_id) DO UPDATE SET
 	if userHeaderMsgID != 0 {
 		header = userHeaderMsgID
 	}
-	_, err := s.db.ExecContext(ctx, q, userID, threadID, string(SessionWaiting), header)
+	_, err := s.db.ExecContext(ctx, q, userID, threadID, header)
 	return err
 }
 
 func (s *SQLiteStore) GetSessionByUserID(ctx context.Context, userID int64) (SupportSession, bool, error) {
 	var ss SupportSession
 	err := s.db.QueryRowContext(ctx, `
-		SELECT user_id, thread_id, status, manager_id, manager_first, manager_last, manager_username,
+		SELECT user_id, thread_id,manager_id, manager_first, manager_last, manager_username,
 		       user_header_msg, pinned_msg_id, updated_at
 		FROM support_sessions WHERE user_id = ? LIMIT 1
 	`, userID).Scan(
-		&ss.UserID, &ss.ThreadID, &ss.Status,
+		&ss.UserID, &ss.ThreadID,
 		&ss.ManagerID, &ss.ManagerFirst, &ss.ManagerLast, &ss.ManagerUser,
 		&ss.UserHeaderMsg, &ss.PinnedMsgID, &ss.UpdatedAt,
 	)
@@ -297,13 +289,12 @@ INSERT INTO support_sessions (user_id, thread_id, status, updated_at)
 VALUES (?, ?, ?, datetime('now'))
 ON CONFLICT(user_id) DO UPDATE SET
   thread_id        = excluded.thread_id,
-  status           = excluded.status,
   manager_id       = NULL,
   manager_first    = NULL,
   manager_last     = NULL,
   manager_username = NULL,
   updated_at       = datetime('now')
-`, userID, threadID, string(SessionWaiting))
+`, userID, threadID)
 	return err
 }
 
@@ -314,7 +305,7 @@ func (s *SQLiteStore) GetSessionByThreadID(ctx context.Context, threadID int) (S
 		       user_header_msg, pinned_msg_id, updated_at
 		FROM support_sessions WHERE thread_id = ? LIMIT 1
 	`, threadID).Scan(
-		&ss.UserID, &ss.ThreadID, &ss.Status,
+		&ss.UserID, &ss.ThreadID,
 		&ss.ManagerID, &ss.ManagerFirst, &ss.ManagerLast, &ss.ManagerUser,
 		&ss.UserHeaderMsg, &ss.PinnedMsgID, &ss.UpdatedAt,
 	)
@@ -330,14 +321,13 @@ func (s *SQLiteStore) GetSessionByThreadID(ctx context.Context, threadID int) (S
 func (s *SQLiteStore) CloseSession(ctx context.Context, userID int64) error {
 	_, err := s.db.ExecContext(ctx, `
 UPDATE support_sessions SET
-  status           = ?,
   manager_id       = NULL,
   manager_first    = NULL,
   manager_last     = NULL,
   manager_username = NULL,
   updated_at       = datetime('now')
 WHERE user_id = ?
-`, string(SessionClosed), userID)
+`, userID)
 	return err
 }
 
@@ -371,9 +361,9 @@ func (s *SQLiteStore) GetStatusMsgID(ctx context.Context, userID int64) (int, bo
 func (s *SQLiteStore) SetStatusMsgID(ctx context.Context, userID int64, msgID int) error {
 	// сессия должна существовать (иначе апдейт не заденет строку)
 	_, _ = s.db.ExecContext(ctx, `
-		INSERT OR IGNORE INTO support_sessions (user_id, thread_id, status, updated_at)
+		INSERT OR IGNORE INTO support_sessions (user_id, thread_id, updated_at)
 		VALUES (?, 0, ?, datetime('now'))
-	`, userID, string(SessionWaiting))
+	`, userID)
 
 	_, err := s.db.ExecContext(ctx, `
 		UPDATE support_sessions
@@ -397,9 +387,9 @@ func (s *SQLiteStore) GetPinnedMsgID(ctx context.Context, userID int64) (int, bo
 func (s *SQLiteStore) SetPinnedMsgID(ctx context.Context, userID int64, msgID int) error {
 	// гарантируем строку сессии
 	_, _ = s.db.ExecContext(ctx, `
-INSERT OR IGNORE INTO support_sessions (user_id, thread_id, status, updated_at)
+INSERT OR IGNORE INTO support_sessions (user_id, thread_id, updated_at)
 VALUES (?, 0, ?, datetime('now'))
-`, userID, string(SessionWaiting))
+`, userID)
 
 	_, err := s.db.ExecContext(ctx, `
 UPDATE support_sessions
@@ -431,11 +421,10 @@ func (s *SQLiteStore) ActivateSession(ctx context.Context, userID int64, manager
 	_, _ = s.db.ExecContext(ctx, `
 INSERT OR IGNORE INTO support_sessions (user_id, thread_id, status, updated_at)
 VALUES (?, 0, ?, datetime('now'))
-`, userID, string(SessionWaiting))
+`, userID)
 
 	q := `
 UPDATE support_sessions SET
-  status = ?,
   manager_id = ?,
   manager_first = ?,
   manager_last = ?,
@@ -445,7 +434,6 @@ UPDATE support_sessions SET
 WHERE user_id = ?;
 `
 	_, err := s.db.ExecContext(ctx, q,
-		string(SessionActive),
 		manager.UserID,
 		nullStringOrNil(manager.FirstName),
 		nullStringOrNil(manager.LastName),
@@ -453,5 +441,15 @@ WHERE user_id = ?;
 		nullInt64OrNil(sql.NullInt64{Int64: pinnedMsgID, Valid: pinnedMsgID != 0}),
 		userID,
 	)
+	return err
+}
+
+// EnsureSessionRow creates support_sessions row if not exists.
+// IMPORTANT: does NOT touch thread_id, manager, etc.
+func (s *SQLiteStore) EnsureSessionRow(ctx context.Context, userID int64) error {
+	_, err := s.db.ExecContext(ctx, `
+		INSERT OR IGNORE INTO support_sessions (user_id, thread_id,updated_at)
+		VALUES (?, 0, 'waiting', datetime('now'))
+	`, userID)
 	return err
 }

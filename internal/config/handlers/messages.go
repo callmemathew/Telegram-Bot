@@ -100,11 +100,6 @@ func (h *Handlers) handleUserPrivate(ctx context.Context, m *telego.Message) {
 		h.sendLangMenu(ctx, chatID)
 		return
 
-	case "/stop":
-		// если хочешь можно ничего не делать, но лучше подсказка
-		h.sendText(ctx, chatID, stoppedText(lang))
-		return
-
 	case "":
 		// not a command -> continue
 
@@ -232,22 +227,11 @@ func langSavedText(lang string) string {
 func startHintText(lang string) string {
 	switch strings.ToUpper(lang) {
 	case "UA":
-		return "✍️ Пишіть повідомлення — я передам менеджерам."
+		return "Напишіть ваше повідомлення — команда DocData відповість вам найближчим часом.\n\n💬 Це живий чат підтримки."
 	case "EN":
-		return "✍️ Send a message — I’ll forward it to managers."
+		return "Send your message — the DocData team will respond shortly.\n\n💬 This is a live support chat."
 	default:
-		return "✍️ Напиши сообщение — я передам менеджерам."
-	}
-}
-
-func stoppedText(lang string) string {
-	switch strings.ToUpper(lang) {
-	case "UA":
-		return "⛔ Зупинив. Щоб почати знову — /start"
-	case "EN":
-		return "⛔ Stopped. To start again — /start"
-	default:
-		return "⛔ Остановил. Чтобы начать заново — /start"
+		return "Напишите ваше сообщение — команда DocData ответит вам в ближайшее время.\n\n💬 Это живой чат поддержки."
 	}
 }
 
