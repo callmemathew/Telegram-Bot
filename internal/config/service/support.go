@@ -365,6 +365,71 @@ func (s *SupportService) OnManagerReply(ctx context.Context, m *telego.Message) 
 		MessageID:  m.MessageID,
 	})
 	return err
+		// attachment flow
+	cap := strings.TrimSpace(m.Caption)
+	if cap != "" {
+		out := fmt.Sprintf("%s:\n%s", managerName, cap)
+		_, _ = s.bot.SendMessage(ctx, telegoutil.Message(telegoutil.ID(u.ChatID), out))
+	} else {
+		out := fmt.Sprintf("%s:", managerName)
+		_, _ = s.bot.SendMessage(ctx, telegoutil.Message(telegoutil.ID(u.ChatID), out))
+	}
+
+	_, err = s.bot.CopyMessage(ctx, &telego.CopyMessageParams{
+		ChatID:     telegoutil.ID(u.ChatID),
+		FromChatID: telegoutil.ID(s.managersChatID),
+		MessageID:  m.MessageID,
+	})
+	return err
+}	// attachment flow
+	cap := strings.TrimSpace(m.Caption)
+	if cap != "" {
+		out := fmt.Sprintf("%s:\n%s", managerName, cap)
+		_, _ = s.bot.SendMessage(ctx, telegoutil.Message(telegoutil.ID(u.ChatID), out))
+	} else {
+		out := fmt.Sprintf("%s:", managerName)
+		_, _ = s.bot.SendMessage(ctx, telegoutil.Message(telegoutil.ID(u.ChatID), out))
+	}
+
+	_, err = s.bot.CopyMessage(ctx, &telego.CopyMessageParams{
+		ChatID:     telegoutil.ID(u.ChatID),
+		FromChatID: telegoutil.ID(s.managersChatID),
+		MessageID:  m.MessageID,
+	})
+	return err
+}	// attachment flow
+	cap := strings.TrimSpace(m.Caption)
+	if cap != "" {
+		out := fmt.Sprintf("%s:\n%s", managerName, cap)
+		_, _ = s.bot.SendMessage(ctx, telegoutil.Message(telegoutil.ID(u.ChatID), out))
+	} else {
+		out := fmt.Sprintf("%s:", managerName)
+		_, _ = s.bot.SendMessage(ctx, telegoutil.Message(telegoutil.ID(u.ChatID), out))
+	}
+
+	_, err = s.bot.CopyMessage(ctx, &telego.CopyMessageParams{
+		ChatID:     telegoutil.ID(u.ChatID),
+		FromChatID: telegoutil.ID(s.managersChatID),
+		MessageID:  m.MessageID,
+	})
+	return err
+}	// attachment flow
+	cap := strings.TrimSpace(m.Caption)
+	if cap != "" {
+		out := fmt.Sprintf("%s:\n%s", managerName, cap)
+		_, _ = s.bot.SendMessage(ctx, telegoutil.Message(telegoutil.ID(u.ChatID), out))
+	} else {
+		out := fmt.Sprintf("%s:", managerName)
+		_, _ = s.bot.SendMessage(ctx, telegoutil.Message(telegoutil.ID(u.ChatID), out))
+	}
+
+	_, err = s.bot.CopyMessage(ctx, &telego.CopyMessageParams{
+		ChatID:     telegoutil.ID(u.ChatID),
+		FromChatID: telegoutil.ID(s.managersChatID),
+		MessageID:  m.MessageID,
+	})
+	return err
+}
 }
 
 // =========================
