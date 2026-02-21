@@ -8,7 +8,6 @@ import (
 	"tg-bot/internal/config/service"
 
 	"github.com/mymmrac/telego"
-	"github.com/mymmrac/telego/telegoutil"
 )
 
 type Handlers struct {
@@ -26,6 +25,8 @@ func New(bot *telego.Bot, support *service.SupportService, managersChatID int64)
 }
 
 func (h *Handlers) HandleUpdate(ctx context.Context, upd telego.Update) {
+	log.Printf("UPDATE: msg=%v cb=%v", upd.Message != nil, upd.CallbackQuery != nil)
+
 	switch {
 	case upd.CallbackQuery != nil:
 		h.handleCallback(ctx, upd.CallbackQuery)
@@ -33,13 +34,15 @@ func (h *Handlers) HandleUpdate(ctx context.Context, upd telego.Update) {
 		h.handleMessage(ctx, upd.Message)
 	}
 }
-
 func (h *Handlers) handleMessage(ctx context.Context, m *telego.Message) {
+	log.Printf("IN: chat_id=%d chat_type=%s thread_id=%d managersChatID=%d text=%q",
+		m.Chat.ID, m.Chat.Type, m.MessageThreadID, h.managersChatID, m.Text,
+	)
 	if m == nil || m.Chat.ID == 0 {
 		return
 	}
 
-	// 1) Managers forum chat -> replies from managers
+	// 1) managers forum chat -> replies from managers
 	if m.Chat.ID == h.managersChatID {
 		// ignore "General"
 		if m.MessageThreadID == 0 {
@@ -51,7 +54,7 @@ func (h *Handlers) handleMessage(ctx context.Context, m *telego.Message) {
 		return
 	}
 
-	// 2) Only private user chat
+	// 2) only private user chat
 	if m.Chat.Type != telego.ChatTypePrivate {
 		return
 	}
@@ -60,72 +63,76 @@ func (h *Handlers) handleMessage(ctx context.Context, m *telego.Message) {
 }
 
 func (h *Handlers) handleUserPrivate(ctx context.Context, m *telego.Message) {
-	if m == nil || m.Chat.ID == 0 {
+	if m == nil || m.Chat.ID == 0 || m.From == nil {
 		return
 	}
+
+	userID := m.From.ID
 	chatID := m.Chat.ID
 
-	// EnsureUser always (so SetLang never fails even after DROP)
-	if m.From != nil {
-		if err := h.support.EnsureUser(ctx, m.From, chatID); err != nil {
-			log.Println("EnsureUser error:", err)
-		}
+	// always ensure user (после DROP тоже)
+	if err := h.support.EnsureUser(ctx, m.From, chatID); err != nil {
+		log.Println("EnsureUser error:", err)
 	}
 
 	text := strings.TrimSpace(m.Text)
 	cmd := parseCmd(text)
 
-	// lang for help texts
-	lang := "RU"
-	if m.From != nil {
-		if l, ok, err := h.support.GetLang(ctx, m.From.ID); err == nil && ok && strings.TrimSpace(l) != "" {
-			lang = strings.ToUpper(strings.TrimSpace(l))
-		}
-	}
-
 	switch cmd {
 	case "/start":
-		// /start = если языка нет -> меню, если язык есть -> подсказка "пиши"
-		if m.From == nil {
+		// если языка нет -> открыть меню (редактируем баннер)
+		if _, ok, err := h.support.GetLang(ctx, userID); err == nil && !ok {
+			if err := h.support.OpenLangMenu(ctx, userID, chatID); err != nil {
+				log.Println("OpenLangMenu error:", err)
+			}
 			return
 		}
-		if _, ok, _ := h.support.GetLang(ctx, m.From.ID); !ok {
-			h.sendLangMenu(ctx, chatID)
-			return
+
+		// язык есть -> показать hint (редактируем баннер)
+		if err := h.support.ShowStartHint(ctx, userID, chatID); err != nil {
+			log.Println("ShowStartHint error:", err)
 		}
-		h.sendText(ctx, chatID, startHintText(lang))
 		return
 
 	case "/lang":
-		h.sendLangMenu(ctx, chatID)
+		// всегда открываем меню редактированием баннера
+		if err := h.support.OpenLangMenu(ctx, userID, chatID); err != nil {
+			log.Println("OpenLangMenu error:", err)
+		}
 		return
 
 	case "":
-		// not a command -> continue
+		// not a command -> continue below
 
 	default:
-		h.sendText(ctx, chatID, unknownCmdText(lang))
+		// неизвестная команда -> НЕ спамим сообщениями
+		// если языка нет -> меню, иначе -> hint
+		if _, ok, err := h.support.GetLang(ctx, userID); err == nil && !ok {
+			if err := h.support.OpenLangMenu(ctx, userID, chatID); err != nil {
+				log.Println("OpenLangMenu error:", err)
+			}
+		} else {
+			if err := h.support.ShowStartHint(ctx, userID, chatID); err != nil {
+				log.Println("ShowStartHint error:", err)
+			}
+		}
 		return
 	}
 
-	// normal user message -> forward to managers
-	if m.From == nil {
+	// ===== обычное сообщение (НЕ команда) =====
+
+	// если языка нет -> заставляем выбрать (редактируем баннер) и не форвардим
+	if _, ok, err := h.support.GetLang(ctx, userID); err == nil && !ok {
+		if err := h.support.OpenLangMenu(ctx, userID, chatID); err != nil {
+			log.Println("OpenLangMenu error:", err)
+		}
 		return
 	}
 
-	// if language not chosen -> show menu and do not forward
-	if _, ok, _ := h.support.GetLang(ctx, m.From.ID); !ok {
-		h.sendLangMenu(ctx, chatID)
-		return
-	}
-
+	// форвардим менеджерам
 	if err := h.support.OnUserMessage(ctx, m); err != nil {
 		log.Println("OnUserMessage error:", err)
-		h.sendText(ctx, chatID, "⚠️ support error: "+err.Error())
-		return
 	}
-
-	// ✅ no extra replies here
 }
 
 func (h *Handlers) handleCallback(ctx context.Context, cb *telego.CallbackQuery) {
@@ -133,7 +140,7 @@ func (h *Handlers) handleCallback(ctx context.Context, cb *telego.CallbackQuery)
 		return
 	}
 
-	// remove "loading"
+	// убрать "loading" на кнопке
 	_ = h.bot.AnswerCallbackQuery(ctx, &telego.AnswerCallbackQueryParams{
 		CallbackQueryID: cb.ID,
 	})
@@ -142,61 +149,43 @@ func (h *Handlers) handleCallback(ctx context.Context, cb *telego.CallbackQuery)
 		return
 	}
 
+	userID := cb.From.ID
+
+	// ✅ железно правильный chatID:
+	// - в private обычно == userID
+	// - но правильнее брать cb.Message.Chat.ID если есть
+	chatID := userID
+
 	lang := strings.ToUpper(strings.TrimSpace(strings.TrimPrefix(cb.Data, "lang:")))
 	if lang != "RU" && lang != "UA" && lang != "EN" {
 		lang = "RU"
 	}
 
-	// EnsureUser again (safe)
-	if err := h.support.EnsureUser(ctx, &cb.From, cb.From.ID); err != nil {
+	// EnsureUser safe
+	if err := h.support.EnsureUser(ctx, &cb.From, chatID); err != nil {
 		log.Println("EnsureUser error:", err)
 		return
 	}
 
-	if err := h.support.SetLang(ctx, cb.From.ID, lang); err != nil {
+	// Save lang
+	if err := h.support.SetLang(ctx, userID, lang); err != nil {
 		log.Println("SetLang error:", err)
 		return
 	}
 
-	// remove keyboard from the menu message
-	if cb.Message != nil {
-		msgID := cb.Message.GetMessageID()
-		_, _ = h.bot.EditMessageReplyMarkup(ctx, &telego.EditMessageReplyMarkupParams{
-			ChatID:      telegoutil.ID(cb.From.ID),
-			MessageID:   msgID,
-			ReplyMarkup: &telego.InlineKeyboardMarkup{},
-		})
+	// ✅ НЕ отправляем новое сообщение "saved"
+	// ✅ просто редактируем баннер на StartHint
+	if err := h.support.ShowStartHint(ctx, userID, chatID); err != nil {
+		log.Println("ShowStartHint error:", err)
 	}
 
-	// one confirmation message
-	h.sendText(ctx, cb.From.ID, langSavedText(lang))
-	h.sendText(ctx, cb.From.ID, startHintText(lang))
-
-	// ✅ если хочешь обновлять topic title / pinned card — оставь, если нет — удали строку
-	_ = h.support.RefreshLangUI(ctx, cb.From.ID)
+	// manager-side UI refresh (topic title + pin card)
+	if err := h.support.RefreshLangUI(ctx, userID); err != nil {
+		log.Println("RefreshLangUI error:", err)
+	}
 }
 
-func (h *Handlers) sendLangMenu(ctx context.Context, chatID int64) {
-	kb := telegoutil.InlineKeyboard(
-		telegoutil.InlineKeyboardRow(
-			telegoutil.InlineKeyboardButton("🇷🇺 Русский").WithCallbackData("lang:RU"),
-			telegoutil.InlineKeyboardButton("🇺🇦 Українська").WithCallbackData("lang:UA"),
-			telegoutil.InlineKeyboardButton("🇬🇧 English").WithCallbackData("lang:EN"),
-		),
-	)
-
-	msg := telegoutil.Message(telegoutil.ID(chatID), pickLangText())
-	msg.ReplyMarkup = kb
-	_, _ = h.bot.SendMessage(ctx, msg)
-}
-
-func (h *Handlers) sendText(ctx context.Context, chatID int64, text string) {
-	_, _ = h.bot.SendMessage(ctx, telegoutil.Message(telegoutil.ID(chatID), text))
-}
-
-// --------------------
-// helpers / texts
-// --------------------
+// helpers
 
 func parseCmd(text string) string {
 	if !strings.HasPrefix(text, "/") {
@@ -207,41 +196,4 @@ func parseCmd(text string) string {
 		cmd = cmd[:i]
 	}
 	return cmd
-}
-
-func pickLangText() string {
-	return "🌍 Выберите язык / Оберіть мову / Choose language:"
-}
-
-func langSavedText(lang string) string {
-	switch strings.ToUpper(lang) {
-	case "UA":
-		return "✅ Мову збережено."
-	case "EN":
-		return "✅ Language saved."
-	default:
-		return "✅ Язык сохранён."
-	}
-}
-
-func startHintText(lang string) string {
-	switch strings.ToUpper(lang) {
-	case "UA":
-		return "Напишіть ваше повідомлення — команда DocData відповість вам найближчим часом.\n\n💬 Це живий чат підтримки."
-	case "EN":
-		return "Send your message — the DocData team will respond shortly.\n\n💬 This is a live support chat."
-	default:
-		return "Напишите ваше сообщение — команда DocData ответит вам в ближайшее время.\n\n💬 Это живой чат поддержки."
-	}
-}
-
-func unknownCmdText(lang string) string {
-	switch strings.ToUpper(lang) {
-	case "UA":
-		return "🤷‍♂️ Невідома команда. Використайте /start або /lang."
-	case "EN":
-		return "🤷‍♂️ Unknown command. Use /start or /lang."
-	default:
-		return "🤷‍♂️ Неизвестная команда. Используй /start или /lang."
-	}
 }

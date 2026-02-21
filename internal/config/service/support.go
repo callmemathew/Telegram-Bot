@@ -26,6 +26,8 @@ func NewSupportService(bot *telego.Bot, managersChatID int64, store *storage.SQL
 	}
 }
 
+// ✅ ВАЖНО: пустая клавиатура должна быть именно [] (НЕ nil)
+
 // =========================
 // User ensure
 // =========================
@@ -272,6 +274,27 @@ func (s *SupportService) OnUserMessage(ctx context.Context, m *telego.Message) e
 }
 
 // =========================
+// USER UI: banner menu
+// =========================
+func (s *SupportService) OpenLangMenu(ctx context.Context, userID, chatID int64) error {
+	_ = s.store.EnsureUser(ctx, storage.User{UserID: userID, ChatID: chatID})
+
+	kb := telegoutil.InlineKeyboard(
+		telegoutil.InlineKeyboardRow(
+			telegoutil.InlineKeyboardButton("🇷🇺 Русский").WithCallbackData("lang:RU"),
+			telegoutil.InlineKeyboardButton("🇺🇦 Українська").WithCallbackData("lang:UA"),
+			telegoutil.InlineKeyboardButton("🇬🇧 English").WithCallbackData("lang:EN"),
+		),
+	)
+
+	return s.upsertBanner(ctx, userID, chatID, pickLangText(), kb)
+}
+
+func pickLangText() string {
+	return "🌍 Выберите язык / Оберіть мову / Choose language:"
+}
+
+// =========================
 // MANAGER -> USER
 // =========================
 
@@ -286,7 +309,7 @@ func (s *SupportService) OnManagerReply(ctx context.Context, m *telego.Message) 
 		return err
 	}
 
-	// lang (можно не использовать, но оставим для будущего)
+	// lang
 	lang := "RU"
 	if l, ok, _ := s.store.GetLangByUserID(ctx, u.UserID); ok && strings.TrimSpace(l) != "" {
 		lang = normLang(l)
@@ -365,12 +388,111 @@ func (s *SupportService) OnManagerReply(ctx context.Context, m *telego.Message) 
 		MessageID:  m.MessageID,
 	})
 	return err
-
 }
 
 // =========================
 // helpers
 // =========================
+
+func (s *SupportService) ShowStartHint(ctx context.Context, userID, chatID int64) error {
+	lang := "RU"
+	if l, ok, _ := s.store.GetLangByUserID(ctx, userID); ok && strings.TrimSpace(l) != "" {
+		lang = normLang(l)
+	}
+	text := startHintText(lang)
+
+	mid, ok, _ := s.store.GetStatusMsgID(ctx, userID)
+	if ok && mid != 0 {
+		_, err := s.bot.EditMessageText(ctx, &telego.EditMessageTextParams{
+			ChatID:      telegoutil.ID(chatID),
+			MessageID:   mid,
+			Text:        text,
+			ReplyMarkup: emptyInlineKB(), // убрать клаву корректно
+			ParseMode:   "Markdown",
+		})
+		if isMessageNotModified(err) {
+			return nil
+		}
+		// 🔥 важное: если не смогли отредачить — шлём новый баннер
+		if shouldResendBanner(err) {
+			msg := telegoutil.Message(telegoutil.ID(chatID), text)
+			msg.ParseMode = "Markdown"
+			sent, e2 := s.bot.SendMessage(ctx, msg)
+			if e2 != nil {
+				return e2
+			}
+			return s.store.SetStatusMsgID(ctx, userID, sent.MessageID)
+		}
+		return err
+	}
+
+	msg := telegoutil.Message(telegoutil.ID(chatID), text)
+	msg.ParseMode = "Markdown"
+	sent, err := s.bot.SendMessage(ctx, msg)
+	if err != nil {
+		return err
+	}
+	return s.store.SetStatusMsgID(ctx, userID, sent.MessageID)
+}
+
+func startHintText(lang string) string {
+	switch strings.ToUpper(lang) {
+	case "UA":
+		return "Напишіть ваше повідомлення — команда DocData відповість вам найближчим часом.\n\n💬 Це живий чат підтримки."
+	case "EN":
+		return "Send your message — the DocData team will respond shortly.\n\n💬 This is a live support chat."
+	default:
+		return "Напишите ваше сообщение — команда DocData ответит вам в ближайшее время.\n\n💬 Это живой чат поддержки."
+	}
+}
+
+func (s *SupportService) upsertBanner(ctx context.Context, userID, chatID int64, text string, kb *telego.InlineKeyboardMarkup) error {
+	mid, ok, err := s.store.GetStatusMsgID(ctx, userID)
+	if err != nil {
+		return err
+	}
+
+	if ok && mid != 0 {
+		p := &telego.EditMessageTextParams{
+			ChatID:    telegoutil.ID(chatID),
+			MessageID: mid,
+			Text:      text,
+		}
+		if kb != nil {
+			p.ReplyMarkup = kb
+		} else {
+			p.ReplyMarkup = emptyInlineKB()
+		}
+
+		_, err := s.bot.EditMessageText(ctx, p)
+		if isMessageNotModified(err) {
+			return nil
+		}
+		if shouldResendBanner(err) {
+			msg := telegoutil.Message(telegoutil.ID(chatID), text)
+			if kb != nil {
+				msg.ReplyMarkup = kb
+			}
+			sent, e2 := s.bot.SendMessage(ctx, msg)
+			if e2 != nil {
+				return e2
+			}
+			return s.store.SetStatusMsgID(ctx, userID, sent.MessageID)
+		}
+		return err
+	}
+
+	msg := telegoutil.Message(telegoutil.ID(chatID), text)
+	if kb != nil {
+		msg.ReplyMarkup = kb
+	}
+	sent, err := s.bot.SendMessage(ctx, msg)
+	if err != nil {
+		return err
+	}
+	return s.store.SetStatusMsgID(ctx, userID, sent.MessageID)
+}
+
 func buildManagerName(u *telego.User) string {
 	if u == nil {
 		return "Support manager"
@@ -388,6 +510,7 @@ func buildManagerName(u *telego.User) string {
 	}
 	return "Support manager"
 }
+
 func isMessageNotModified(err error) bool {
 	if err == nil {
 		return false
@@ -461,7 +584,6 @@ func langEmoji(lang string) string {
 }
 
 func sessionManagerName(ss storage.SupportSession) string {
-	// prefer username if present
 	if ss.ManagerUser.Valid && strings.TrimSpace(ss.ManagerUser.String) != "" {
 		return "@" + strings.TrimSpace(ss.ManagerUser.String)
 	}
@@ -537,8 +659,6 @@ func attachmentText(lang string, m *telego.Message) string {
 	}
 }
 
-// ---------- shared helpers ----------
-
 func normLang(lang string) string {
 	lang = strings.ToUpper(strings.TrimSpace(lang))
 	switch lang {
@@ -555,4 +675,21 @@ func toNullString(s string) sql.NullString {
 		return sql.NullString{Valid: false}
 	}
 	return sql.NullString{String: s, Valid: true}
+}
+func shouldResendBanner(err error) bool {
+	if err == nil {
+		return false
+	}
+	s := err.Error()
+	// типовые причины: сообщение удалено/не найдено/нельзя редактировать/битый reply_markup
+	return strings.Contains(s, "message to edit not found") ||
+		strings.Contains(s, "MESSAGE_ID_INVALID") ||
+		strings.Contains(s, "message can't be edited") ||
+		strings.Contains(s, "Bad Request")
+}
+
+func emptyInlineKB() *telego.InlineKeyboardMarkup {
+	return &telego.InlineKeyboardMarkup{
+		InlineKeyboard: make([][]telego.InlineKeyboardButton, 0),
+	}
 }
