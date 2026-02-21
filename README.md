@@ -1,5 +1,4 @@
 # Telegram-Bot
-[![Ask DeepWiki](https://devin.ai/assets/askdeepwiki.png)](https://deepwiki.com/callmemathew/Telegram-Bot)
 
 This repository provides a robust architecture for a Telegram-based live support bot, designed for SaaS products or any service requiring direct user-to-manager communication. It leverages Telegram's forum topics to create organized, per-user support threads, and includes features like session management, multi-language support, and persistent storage using SQLite.
 
