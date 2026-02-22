@@ -20,8 +20,6 @@ type User struct {
 	ThreadID  sql.NullInt64
 }
 
-type SessionStatus string
-
 type SupportSession struct {
 	UserID        int64
 	ThreadID      int64
@@ -241,17 +239,10 @@ func (s *SQLiteStore) GetUserByUserID(ctx context.Context, userID int64) (User, 
 
 func (s *SQLiteStore) UpsertSessionWaiting(ctx context.Context, userID int64, threadID int, userHeaderMsgID int64) error {
 	q := `
-INSERT INTO support_sessions (user_id, thread_id, status, user_header_msg, updated_at)
+INSERT INTO support_sessions (user_id, thread_id, user_header_msg, updated_at)
 VALUES (?, ?, ?, ?, datetime('now'))
 ON CONFLICT(user_id) DO UPDATE SET
   thread_id = excluded.thread_id,
-
-  -- ❗️НЕ даём сбить ACTIVE обратно в WAITING
-  status = CASE
-    WHEN support_sessions.status = 'active' THEN support_sessions.status
-    ELSE excluded.status
-  END,
-
   user_header_msg = COALESCE(excluded.user_header_msg, support_sessions.user_header_msg),
   updated_at      = datetime('now');
 `
@@ -285,7 +276,7 @@ func (s *SQLiteStore) GetSessionByUserID(ctx context.Context, userID int64) (Sup
 func (s *SQLiteStore) ResetSessionToWaiting(ctx context.Context, userID int64, threadID int) error {
 	// если строки нет — создадим
 	_, err := s.db.ExecContext(ctx, `
-INSERT INTO support_sessions (user_id, thread_id, status, updated_at)
+INSERT INTO support_sessions (user_id, thread_id, updated_at)
 VALUES (?, ?, ?, datetime('now'))
 ON CONFLICT(user_id) DO UPDATE SET
   thread_id        = excluded.thread_id,
@@ -301,7 +292,7 @@ ON CONFLICT(user_id) DO UPDATE SET
 func (s *SQLiteStore) GetSessionByThreadID(ctx context.Context, threadID int) (SupportSession, bool, error) {
 	var ss SupportSession
 	err := s.db.QueryRowContext(ctx, `
-		SELECT user_id, thread_id, status, manager_id, manager_first, manager_last, manager_username,
+		SELECT user_id, thread_id, manager_id, manager_first, manager_last, manager_username,
 		       user_header_msg, pinned_msg_id, updated_at
 		FROM support_sessions WHERE thread_id = ? LIMIT 1
 	`, threadID).Scan(
@@ -419,7 +410,7 @@ func nullInt64OrNil(v sql.NullInt64) any {
 func (s *SQLiteStore) ActivateSession(ctx context.Context, userID int64, manager User, pinnedMsgID int64) error {
 	// гарантируем строку сессии (если вдруг её нет)
 	_, _ = s.db.ExecContext(ctx, `
-INSERT OR IGNORE INTO support_sessions (user_id, thread_id, status, updated_at)
+INSERT OR IGNORE INTO support_sessions (user_id, thread_id, updated_at)
 VALUES (?, 0, ?, datetime('now'))
 `, userID)
 
