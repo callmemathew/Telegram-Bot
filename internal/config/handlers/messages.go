@@ -133,6 +133,7 @@ func (h *Handlers) handleCallback(ctx context.Context, cb *telego.CallbackQuery)
 		return
 	}
 
+	// remove "loading"
 	_ = h.bot.AnswerCallbackQuery(ctx, &telego.AnswerCallbackQueryParams{
 		CallbackQueryID: cb.ID,
 	})
@@ -146,44 +147,33 @@ func (h *Handlers) handleCallback(ctx context.Context, cb *telego.CallbackQuery)
 		lang = "RU"
 	}
 
-	chatID := cb.From.ID
-	userID := cb.From.ID
-
-	// EnsureUser
-	if err := h.support.EnsureUser(ctx, &cb.From, chatID); err != nil {
+	// EnsureUser again (safe)
+	if err := h.support.EnsureUser(ctx, &cb.From, cb.From.ID); err != nil {
 		log.Println("EnsureUser error:", err)
 		return
 	}
 
-	// Save lang
-	if err := h.support.SetLang(ctx, userID, lang); err != nil {
+	if err := h.support.SetLang(ctx, cb.From.ID, lang); err != nil {
 		log.Println("SetLang error:", err)
 		return
 	}
 
-	// ✅ 1) "Language saved" -> РЕДАКТИРУЕМ ТО ЖЕ сообщение с меню языка
-	// Никаких новых SendMessage.
+	// remove keyboard from the menu message
 	if cb.Message != nil {
-		emptyKB := &telego.InlineKeyboardMarkup{
-			InlineKeyboard: make([][]telego.InlineKeyboardButton, 0),
-		}
-
-		_, err := h.bot.EditMessageText(ctx, &telego.EditMessageTextParams{
-			ChatID:      telegoutil.ID(chatID),
-			MessageID:   cb.Message.GetMessageID(), // 🔥 именно сообщение с меню
-			Text:        langSavedText(lang),       // ✅ saved text
-			ReplyMarkup: emptyKB,                   // убрать кнопки
+		msgID := cb.Message.GetMessageID()
+		_, _ = h.bot.EditMessageReplyMarkup(ctx, &telego.EditMessageReplyMarkupParams{
+			ChatID:      telegoutil.ID(cb.From.ID),
+			MessageID:   msgID,
+			ReplyMarkup: &telego.InlineKeyboardMarkup{},
 		})
-		if err != nil {
-			log.Println("Edit lang menu -> saved error:", err)
-		}
 	}
 
-	// ✅ 2) пока НЕ трогаем startHint (это следующий шаг)
-	// h.sendText(ctx, chatID, startHintText(lang))  // УДАЛИТЬ/НЕ ДЕЛАТЬ
-	// h.sendText(ctx, chatID, langSavedText(lang))  // УДАЛИТЬ/НЕ ДЕЛАТЬ
+	// one confirmation message
+	h.sendText(ctx, cb.From.ID, langSavedText(lang))
+	h.sendText(ctx, cb.From.ID, startHintText(lang))
 
-	_ = h.support.RefreshLangUI(ctx, userID)
+	// ✅ если хочешь обновлять topic title / pinned card — оставь, если нет — удали строку
+	_ = h.support.RefreshLangUI(ctx, cb.From.ID)
 }
 
 func (h *Handlers) sendLangMenu(ctx context.Context, chatID int64) {
