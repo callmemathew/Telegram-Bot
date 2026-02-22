@@ -387,11 +387,144 @@ func buildManagerName(u *telego.User) string {
 	}
 	return "Support manager"
 }
+
+// ShowStartHint гарантирует: у пользователя всегда есть "бар".
+// 1) Пытаемся отредактировать сохранённый status_msg_id
+// 2) Если нельзя — отправляем новый и сохраняем новый message_id
+func (s *SupportService) ShowStartHint(ctx context.Context, userID, chatID int64) error {
+	// 1) язык из БД (если нет — RU)
+	lang := "RU"
+	if l, ok, err := s.store.GetLangByUserID(ctx, userID); err == nil && ok && strings.TrimSpace(l) != "" {
+		lang = normLang(l)
+	}
+
+	text := StartHintText(lang)
+
+	// 2) берём сохранённый status_msg_id
+	mid, ok, err := s.store.GetStatusMsgID(ctx, userID)
+	if err != nil {
+		return err
+	}
+
+	// 3) если есть — пробуем редактировать
+	if ok && mid != 0 {
+		emptyKB := &telego.InlineKeyboardMarkup{
+			InlineKeyboard: make([][]telego.InlineKeyboardButton, 0),
+		}
+
+		_, editErr := s.bot.EditMessageText(ctx, &telego.EditMessageTextParams{
+			ChatID:      telegoutil.ID(chatID),
+			MessageID:   mid,
+			Text:        text,
+			ReplyMarkup: emptyKB,
+		})
+
+		// если редактирование прошло или "не изменилось" — ок
+		if editErr == nil || isMessageNotModified(editErr) {
+			return nil
+		}
+
+		// если редактировать нельзя/сообщение удалено — падаем в send ниже
+		if !isUneditableMessage(editErr) {
+			// это реальная ошибка (например, 403, bot blocked)
+			return editErr
+		}
+	}
+
+	// 4) если mid нет ИЛИ редактирование невозможно — отправляем новый бар
+	msg := telegoutil.Message(telegoutil.ID(chatID), text)
+	sent, sendErr := s.bot.SendMessage(ctx, msg)
+	if sendErr != nil {
+		return sendErr
+	}
+
+	// 5) сохраняем новый status_msg_id
+	return s.store.SetStatusMsgID(ctx, userID, sent.MessageID)
+}
+
 func isMessageNotModified(err error) bool {
 	if err == nil {
 		return false
 	}
-	return strings.Contains(err.Error(), "message is not modified")
+	return strings.Contains(strings.ToLower(err.Error()), "message is not modified")
+}
+
+func isUneditableMessage(err error) bool {
+	if err == nil {
+		return false
+	}
+	e := strings.ToLower(err.Error())
+	return strings.Contains(e, "message to edit not found") ||
+		strings.Contains(e, "message can't be edited") ||
+		strings.Contains(e, "message is too old") ||
+		strings.Contains(e, "message_id_invalid") ||
+		strings.Contains(e, "message not found") ||
+		strings.Contains(e, "message identifier is not specified") ||
+		strings.Contains(e, "bad request: message to edit not found")
+}
+func StartHintText(lang string) string {
+	switch strings.ToUpper(lang) {
+	case "UA":
+		return "Напишіть ваше повідомлення — команда DocData відповість вам найближчим часом.\n\n💬 Це живий чат підтримки."
+	case "EN":
+		return "Send your message — the DocData team will respond shortly.\n\n💬 This is a live support chat."
+	default:
+		return "Напишите ваше сообщение — команда DocData ответит вам в ближайшее время.\n\n💬 Это живой чат поддержки."
+	}
+}
+
+// Показываем меню выбора языка ВМЕСТО БАРА (редактируем один и тот же status_msg_id)
+func (s *SupportService) ShowLangMenu(ctx context.Context, userID, chatID int64) error {
+	// гарантируем наличие user
+	_ = s.store.EnsureUser(ctx, storage.User{UserID: userID, ChatID: chatID})
+
+	kb := telegoutil.InlineKeyboard(
+		telegoutil.InlineKeyboardRow(
+			telegoutil.InlineKeyboardButton("🇷🇺 Русский").WithCallbackData("lang:RU"),
+			telegoutil.InlineKeyboardButton("🇺🇦 Українська").WithCallbackData("lang:UA"),
+			telegoutil.InlineKeyboardButton("🇬🇧 English").WithCallbackData("lang:EN"),
+		),
+	)
+
+	text := "🌍 Выберите язык / Оберіть мову / Choose language:"
+
+	mid, ok, err := s.store.GetStatusMsgID(ctx, userID)
+	if err != nil {
+		return err
+	}
+
+	// если бар уже есть -> редактируем его в меню
+	if ok && mid != 0 {
+		_, err := s.bot.EditMessageText(ctx, &telego.EditMessageTextParams{
+			ChatID:      telegoutil.ID(chatID),
+			MessageID:   mid,
+			Text:        text,
+			ReplyMarkup: kb,
+		})
+		if isMessageNotModified(err) {
+			return nil
+		}
+		if err != nil && isUneditableMessage(err) {
+			msg := telegoutil.Message(telegoutil.ID(chatID), text)
+			msg.ReplyMarkup = kb
+			sent, sendErr := s.bot.SendMessage(ctx, msg)
+			if sendErr != nil {
+				return sendErr
+			}
+			return s.store.SetStatusMsgID(ctx, userID, sent.MessageID)
+		}
+		return err
+	}
+
+	// если бара нет -> отправляем меню как бар и сохраняем id
+	msg := telegoutil.Message(telegoutil.ID(chatID), text)
+	msg.ReplyMarkup = kb
+
+	sent, err := s.bot.SendMessage(ctx, msg)
+	if err != nil {
+		return err
+	}
+	return s.store.SetStatusMsgID(ctx, userID, sent.MessageID)
 }
 
 func hasAttachment(m *telego.Message) bool {
@@ -554,4 +687,32 @@ func toNullString(s string) sql.NullString {
 		return sql.NullString{Valid: false}
 	}
 	return sql.NullString{String: s, Valid: true}
+}
+
+// EnsureStartHintOnce — отправляет start hint ОДИН РАЗ.
+// Если уже отправляли (status_msg_id есть) — ничего не делает.
+func (s *SupportService) EnsureStartHintOnce(ctx context.Context, userID, chatID int64) error {
+	// уже есть “бар” -> не трогаем
+	mid, ok, err := s.store.GetStatusMsgID(ctx, userID)
+	if err != nil {
+		return err
+	}
+	if ok && mid != 0 {
+		return nil
+	}
+
+	// язык берем из БД (но потом никогда не меняем этот текст)
+	lang := "RU"
+	if l, ok, err := s.store.GetLangByUserID(ctx, userID); err == nil && ok && strings.TrimSpace(l) != "" {
+		lang = normLang(l)
+	}
+
+	text := StartHintText(lang) // или service.StartHintText(lang) если вынес в service
+
+	sent, err := s.bot.SendMessage(ctx, telegoutil.Message(telegoutil.ID(chatID), text))
+	if err != nil {
+		return err
+	}
+
+	return s.store.SetStatusMsgID(ctx, userID, sent.MessageID)
 }

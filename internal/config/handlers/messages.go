@@ -146,46 +146,43 @@ func (h *Handlers) handleCallback(ctx context.Context, cb *telego.CallbackQuery)
 		lang = "RU"
 	}
 
-	chatID := cb.From.ID
 	userID := cb.From.ID
+	chatID := cb.From.ID
 
-	// EnsureUser
+	// ensure
 	if err := h.support.EnsureUser(ctx, &cb.From, chatID); err != nil {
 		log.Println("EnsureUser error:", err)
 		return
 	}
 
-	// Save lang
+	// save lang
 	if err := h.support.SetLang(ctx, userID, lang); err != nil {
 		log.Println("SetLang error:", err)
 		return
 	}
 
-	// ✅ 1) "Language saved" -> РЕДАКТИРУЕМ ТО ЖЕ сообщение с меню языка
-	// Никаких новых SendMessage.
+	// редактируем ТО ЖЕ сообщение с меню -> "saved" + убрать кнопки
 	if cb.Message != nil {
-		emptyKB := &telego.InlineKeyboardMarkup{
-			InlineKeyboard: make([][]telego.InlineKeyboardButton, 0),
-		}
+		emptyKB := &telego.InlineKeyboardMarkup{InlineKeyboard: [][]telego.InlineKeyboardButton{}}
 
 		_, err := h.bot.EditMessageText(ctx, &telego.EditMessageTextParams{
 			ChatID:      telegoutil.ID(chatID),
-			MessageID:   cb.Message.GetMessageID(), // 🔥 именно сообщение с меню
-			Text:        langSavedText(lang),       // ✅ saved text
-			ReplyMarkup: emptyKB,                   // убрать кнопки
+			MessageID:   cb.Message.GetMessageID(),
+			Text:        langSavedText(lang),
+			ReplyMarkup: emptyKB,
 		})
 		if err != nil {
 			log.Println("Edit lang menu -> saved error:", err)
 		}
 	}
 
-	// ✅ 2) пока НЕ трогаем startHint (это следующий шаг)
-	// h.sendText(ctx, chatID, startHintText(lang))  // УДАЛИТЬ/НЕ ДЕЛАТЬ
-	// h.sendText(ctx, chatID, langSavedText(lang))  // УДАЛИТЬ/НЕ ДЕЛАТЬ
+	// ✅ подсказку отправляем ОДИН РАЗ (если её ещё не было)
+	if err := h.support.EnsureStartHintOnce(ctx, userID, chatID); err != nil {
+		log.Println("EnsureStartHintOnce error:", err)
+	}
 
 	_ = h.support.RefreshLangUI(ctx, userID)
 }
-
 func (h *Handlers) sendLangMenu(ctx context.Context, chatID int64) {
 	kb := telegoutil.InlineKeyboard(
 		telegoutil.InlineKeyboardRow(
