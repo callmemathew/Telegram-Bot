@@ -58,6 +58,13 @@ func (s *SupportService) OnUserMessage(ctx context.Context, m *telego.Message) e
 		threadID = created.MessageThreadID
 		_ = s.store.SetThreadID(ctx, user.ID, threadID)
 	}
+	// достаем storage.User с заполненным ThreadID и создаем/обновляем pinned card
+	u, err := s.store.GetUserByUserID(ctx, user.ID)
+	if err == nil {
+		if err := s.UpsertPinnedCard(ctx, u, lang, "—"); err != nil {
+			return err
+		}
+	}
 
 	// send to managers
 	if !hasAttachment(m) {
