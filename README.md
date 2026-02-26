@@ -85,7 +85,7 @@ Follow these instructions to get a local copy up and running.
 
 1.  A new topic appears in the managers' group chat when a new user sends their first message.
 2.  The topic is titled with the user's name or username.
-3.  A pinned message at the top of the topic contains a "session card" with the user's ID, language, and current support status (`WAITING`, `ACTIVE`, `CLOSED`).
+3.  A pinned message at the top of the topic contains a "session card" with the user's ID, language.
 4.  Any manager can reply within the topic. The first reply activates the session, changing the status to `ACTIVE` and notifying the user.
 5.  All subsequent messages from the manager in that topic are forwarded to the user.
 
