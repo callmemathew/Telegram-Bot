@@ -6,7 +6,6 @@ This repository provides a robust architecture for a Telegram-based live support
 
 *   **Live Support Chat**: Facilitates real-time communication between users and a team of support managers.
 *   **Forum Topic Integration**: Automatically creates a new topic in a designated managers' group for each user, keeping conversations neatly organized.
-*   **Session Management**: Tracks the state of each support session (`waiting`, `active`, `closed`).
 *   **Intelligent Message Routing**: Forwards messages from users to their dedicated manager topic and relays manager replies back to the user.
 *   **Multi-Language Support**: Users can choose their preferred language (English, Russian, Ukrainian), and the bot interface adjusts accordingly.
 *   **Persistent Storage**: Uses SQLite to store user information, session state, and message identifiers, ensuring data is not lost on restart.
