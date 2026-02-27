@@ -34,34 +34,22 @@ func NewSQLiteStore(db *sql.DB) *SQLiteStore {
 func (s *SQLiteStore) Init(ctx context.Context) error {
 	schema := `
 CREATE TABLE IF NOT EXISTS users (
-  id         INTEGER PRIMARY KEY AUTOINCREMENT,
-  user_id    INTEGER NOT NULL UNIQUE,
-  chat_id    INTEGER NOT NULL,
-  username   TEXT,
-  first_name TEXT,
-  last_name  TEXT,
-  lang       TEXT,
-  thread_id  INTEGER,
-  created_at TEXT NOT NULL DEFAULT (datetime('now')),
-  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-);
-
-CREATE INDEX IF NOT EXISTS idx_users_user_id   ON users(user_id);
-CREATE INDEX IF NOT EXISTS idx_users_thread_id ON users(thread_id);
-
-CREATE TABLE IF NOT EXISTS support_sessions (
-  user_id          INTEGER PRIMARY KEY,
-  thread_id        INTEGER NOT NULL DEFAULT 0,
-  manager_id       INTEGER,
-  manager_first    TEXT,
-  manager_last     TEXT,
-  manager_username TEXT,
-  user_header_msg  INTEGER,
+  id               INTEGER PRIMARY KEY AUTOINCREMENT,
+  telegram_user_id INTEGER NOT NULL UNIQUE,
+  chat_id          INTEGER NOT NULL,
+  username         TEXT,
+  first_name       TEXT,
+  last_name        TEXT,
+  lang             TEXT,
+  thread_id        INTEGER,
+  status_msg_id    INTEGER,
   pinned_msg_id    INTEGER,
+  created_at       TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at       TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
-CREATE INDEX IF NOT EXISTS idx_sessions_thread_id ON support_sessions(thread_id);
+CREATE INDEX IF NOT EXISTS idx_users_telegram_user_id ON users(telegram_user_id);
+CREATE INDEX IF NOT EXISTS idx_users_thread_id        ON users(thread_id);
 `
 	_, err := s.db.ExecContext(ctx, schema)
 	return err

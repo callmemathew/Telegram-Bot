@@ -15,7 +15,7 @@ import (
 // Удобно, если хочешь один "закреплённый" message-id вместо спама сообщений.
 
 func (s *SupportService) ShowLangMenu(ctx context.Context, userID, chatID int64) error {
-	_ = s.store.EnsureUser(ctx, storage.User{UserID: userID, ChatID: chatID})
+	_ = s.store.EnsureUser(ctx, storage.User{TelegramUserID: userID, ChatID: chatID})
 
 	kb := telegoutil.InlineKeyboard(
 		telegoutil.InlineKeyboardRow(

@@ -37,12 +37,12 @@ func (s *SupportService) UpsertPinnedCard(
 			"🌍 *Lang:* %s %s\n"+
 			"💼 *Manager:* %s\n",
 		displayUser(user),
-		user.UserID,
+		user.TelegramUserID,
 		langEmoji(lang), lang,
 		prettyManager(managerName),
 	)
 
-	pid, hasPin, err := s.store.GetPinnedMsgID(ctx, user.UserID)
+	pid, hasPin, err := s.store.GetPinnedMsgID(ctx, user.TelegramUserID)
 	if err != nil {
 		return err
 	}
@@ -68,7 +68,7 @@ func (s *SupportService) UpsertPinnedCard(
 			return err
 		}
 
-		if err := s.store.SetPinnedMsgID(ctx, user.UserID, sent.MessageID); err != nil {
+		if err := s.store.SetPinnedMsgID(ctx, user.TelegramUserID, sent.MessageID); err != nil {
 			return err
 		}
 

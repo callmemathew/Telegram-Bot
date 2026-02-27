@@ -19,11 +19,11 @@ func (s *SupportService) EnsureUser(ctx context.Context, tgUser *telego.User, ch
 		return nil
 	}
 	u := storage.User{
-		UserID:    tgUser.ID,
-		ChatID:    chatID,
-		Username:  toNullString(tgUser.Username),
-		FirstName: toNullString(tgUser.FirstName),
-		LastName:  toNullString(tgUser.LastName),
+		TelegramUserID: tgUser.ID,
+		ChatID:         chatID,
+		Username:       toNullString(tgUser.Username),
+		FirstName:      toNullString(tgUser.FirstName),
+		LastName:       toNullString(tgUser.LastName),
 	}
 	return s.store.EnsureUser(ctx, u)
 }
