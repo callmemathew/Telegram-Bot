@@ -79,4 +79,7 @@ func (h *Handlers) handleCallback(ctx context.Context, cb *telego.CallbackQuery)
 	}
 
 	_ = h.support.RefreshLangUI(ctx, userID)
+	if err := h.support.RefreshLangUI(ctx, userID); err != nil {
+		log.Println("RefreshLangUI error:", err)
+	}
 }

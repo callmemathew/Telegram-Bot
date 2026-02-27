@@ -82,7 +82,7 @@ func displayUser(u storage.User) string {
 	if full != "" {
 		return full
 	}
-	return fmt.Sprintf("id%d", u.UserID)
+	return fmt.Sprintf("id%d", u.TelegramUserID)
 }
 
 func prettyManager(name string) string {
@@ -102,25 +102,6 @@ func langEmoji(lang string) string {
 	default:
 		return "🇷🇺"
 	}
-}
-
-func sessionManagerName(ss storage.SupportSession) string {
-	if ss.ManagerUser.Valid && strings.TrimSpace(ss.ManagerUser.String) != "" {
-		return "@" + strings.TrimSpace(ss.ManagerUser.String)
-	}
-	fn := ""
-	ln := ""
-	if ss.ManagerFirst.Valid {
-		fn = strings.TrimSpace(ss.ManagerFirst.String)
-	}
-	if ss.ManagerLast.Valid {
-		ln = strings.TrimSpace(ss.ManagerLast.String)
-	}
-	full := strings.TrimSpace(fn + " " + ln)
-	if full != "" {
-		return full
-	}
-	return ""
 }
 
 func attachmentText(lang string, m *telego.Message) string {
