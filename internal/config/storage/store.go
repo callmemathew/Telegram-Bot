@@ -52,5 +52,14 @@ CREATE INDEX IF NOT EXISTS idx_users_telegram_user_id ON users(telegram_user_id)
 CREATE INDEX IF NOT EXISTS idx_users_thread_id        ON users(thread_id);
 `
 	_, err := s.db.ExecContext(ctx, schema)
-	return err
+	if err != nil {
+		return err
+	}
+
+	// ✅ создаём таблицу messages
+	if err := s.InitMessages(ctx); err != nil {
+		return err
+	}
+
+	return nil
 }
