@@ -39,19 +39,6 @@ func isUneditableMessage(err error) bool {
 		strings.Contains(e, "bad request: message to edit not found")
 }
 
-func hasAttachment(m *telego.Message) bool {
-	if m == nil {
-		return false
-	}
-	return m.Photo != nil ||
-		m.Document != nil ||
-		m.Video != nil ||
-		m.Voice != nil ||
-		m.VideoNote != nil ||
-		m.Audio != nil ||
-		m.Animation != nil
-}
-
 func topicTitle(u *telego.User) string {
 	if u == nil {
 		return "Unknown"
@@ -177,4 +164,36 @@ func toNullString(s string) sql.NullString {
 		return sql.NullString{Valid: false}
 	}
 	return sql.NullString{String: s, Valid: true}
+}
+
+func extractMediaInfo(m *telego.Message) (string, string) {
+	if m == nil {
+		return "", ""
+	}
+
+	switch {
+	case len(m.Photo) > 0:
+		p := m.Photo[len(m.Photo)-1]
+		return "photo", p.FileID
+	case m.Video != nil:
+		return "video", m.Video.FileID
+	case m.Document != nil:
+		return "document", m.Document.FileID
+	case m.Voice != nil:
+		return "voice", m.Voice.FileID
+	case m.VideoNote != nil:
+		return "video_note", m.VideoNote.FileID
+	case m.Audio != nil:
+		return "audio", m.Audio.FileID
+	case m.Animation != nil:
+		return "animation", m.Animation.FileID
+	default:
+		return "", ""
+	}
+}
+func boolToInt(v bool) int {
+	if v {
+		return 1
+	}
+	return 0
 }

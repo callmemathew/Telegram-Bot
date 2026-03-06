@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"tg-bot/internal/config/storage"
 
 	"github.com/mymmrac/telego"
 	"github.com/mymmrac/telego/telegoutil"
@@ -30,22 +31,34 @@ func (s *SupportService) OnManagerReply(ctx context.Context, m *telego.Message) 
 	managerName := buildManagerName(m.From)
 
 	txt := strings.TrimSpace(m.Text)
-	hasAtt := hasAttachment(m)
+	mediaType, fileID := extractMediaInfo(m)
+	hasMedia := mediaType != "" && fileID != ""
 
-	// TEXT
-	if !hasAtt {
-		// команды в личку юзеру не шлём
+	// ===== TEXT ONLY =====
+	if !hasMedia {
 		if txt == "" || strings.HasPrefix(txt, "/") {
 			return nil
 		}
 
 		out := fmt.Sprintf("%s:\n%s", managerName, txt)
 		_, err := s.bot.SendMessage(ctx, telegoutil.Message(telegoutil.ID(u.ChatID), out))
-		return err
+		if err != nil {
+			return err
+		}
+
+		_ = s.store.SaveMessage(ctx, storage.Message{
+			TelegramUserID: u.TelegramUserID,
+			Direction:      "manager",
+			Text:           toNullString(txt),
+			HasMedia:       0,
+		})
+
+		return nil
 	}
 
-	// ATTACHMENT
+	// ===== MEDIA =====
 	cap := strings.TrimSpace(m.Caption)
+
 	if cap != "" {
 		out := fmt.Sprintf("%s:\n%s", managerName, cap)
 		_, _ = s.bot.SendMessage(ctx, telegoutil.Message(telegoutil.ID(u.ChatID), out))
@@ -59,7 +72,20 @@ func (s *SupportService) OnManagerReply(ctx context.Context, m *telego.Message) 
 		FromChatID: telegoutil.ID(s.managersChatID),
 		MessageID:  m.MessageID,
 	})
-	return err
+	if err != nil {
+		return err
+	}
+
+	_ = s.store.SaveMessage(ctx, storage.Message{
+		TelegramUserID: u.TelegramUserID,
+		Direction:      "manager",
+		Text:           toNullString(cap),
+		HasMedia:       1,
+		MediaType:      toNullString(mediaType),
+		FileID:         toNullString(fileID),
+	})
+
+	return nil
 }
 
 func buildManagerName(u *telego.User) string {

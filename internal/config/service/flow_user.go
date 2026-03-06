@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"tg-bot/internal/config/storage"
 
 	"github.com/mymmrac/telego"
 	"github.com/mymmrac/telego/telegoutil"
@@ -56,9 +57,13 @@ func (s *SupportService) OnUserMessage(ctx context.Context, m *telego.Message) e
 			return err
 		}
 		threadID = created.MessageThreadID
-		_ = s.store.SetThreadID(ctx, user.ID, threadID)
+
+		if err := s.store.SetThreadID(ctx, user.ID, threadID); err != nil {
+			return err
+		}
 	}
-	// достаем storage.User с заполненным ThreadID и создаем/обновляем pinned card
+
+	// get fresh user with thread_id and upsert pinned card
 	u, err := s.store.GetUserByUserID(ctx, user.ID)
 	if err == nil {
 		if err := s.UpsertPinnedCard(ctx, u, lang, "—"); err != nil {
@@ -66,21 +71,36 @@ func (s *SupportService) OnUserMessage(ctx context.Context, m *telego.Message) e
 		}
 	}
 
-	// send to managers
-	if !hasAttachment(m) {
-		text := strings.TrimSpace(m.Text)
-		if text == "" {
+	txt := strings.TrimSpace(m.Text)
+	mediaType, fileID := extractMediaInfo(m)
+	hasMedia := mediaType != "" && fileID != ""
+
+	// ===== TEXT ONLY =====
+	if !hasMedia {
+		if txt == "" {
 			return nil
 		}
 
-		out := fmt.Sprintf("👤 %s | %s %s\n💬 %s", topicTitle(user), langEmoji(lang), lang, text)
+		out := fmt.Sprintf("👤 %s | %s %s\n💬 %s", topicTitle(user), langEmoji(lang), lang, txt)
 		msg := telegoutil.Message(telegoutil.ID(s.managersChatID), out)
 		msg.MessageThreadID = threadID
+
 		_, err := s.bot.SendMessage(ctx, msg)
-		return err
+		if err != nil {
+			return err
+		}
+
+		_ = s.store.SaveMessage(ctx, storage.Message{
+			TelegramUserID: user.ID,
+			Direction:      "user",
+			Text:           toNullString(txt),
+			HasMedia:       0,
+		})
+
+		return nil
 	}
 
-	// attachment: header + copy
+	// ===== MEDIA =====
 	label := attachmentText(lang, m)
 	if cap := strings.TrimSpace(m.Caption); cap != "" {
 		label = cap
@@ -97,5 +117,18 @@ func (s *SupportService) OnUserMessage(ctx context.Context, m *telego.Message) e
 		MessageID:       m.MessageID,
 		MessageThreadID: threadID,
 	})
-	return err
+	if err != nil {
+		return err
+	}
+
+	_ = s.store.SaveMessage(ctx, storage.Message{
+		TelegramUserID: user.ID,
+		Direction:      "user",
+		Text:           toNullString(strings.TrimSpace(m.Caption)),
+		HasMedia:       1,
+		MediaType:      toNullString(mediaType),
+		FileID:         toNullString(fileID),
+	})
+
+	return nil
 }
