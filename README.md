@@ -95,7 +95,6 @@ The following commands are available to users in their private chat with the bot
 
 *   `/start`: Initializes the conversation. Prompts for language selection if not already set.
 *   `/lang`: Allows the user to change their preferred language at any time.
-*   `/stop`: Informs the user that the session is stopped. Messages will create a new session.
 
 ## License
 
