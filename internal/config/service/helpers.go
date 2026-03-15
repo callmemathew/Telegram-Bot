@@ -93,61 +93,77 @@ func langEmoji(lang string) string {
 
 func attachmentText(lang string, m *telego.Message) string {
 	lang = normLang(lang)
+
+	mediaType, _ := extractMediaInfo(m)
+
 	switch lang {
 	case "UA":
-		switch {
-		case m.Photo != nil:
+		switch mediaType {
+		case "photo":
 			return "🖼 Фото"
-		case m.Video != nil:
+		case "video":
 			return "🎥 Відео"
-		case m.VideoNote != nil:
-			return "📹 Кружечок"
-		case m.Voice != nil:
+		case "video_note":
+			return "📹 Відеоповідомлення"
+		case "voice":
 			return "🎙 Голосове"
-		case m.Audio != nil:
+		case "audio":
 			return "🎵 Аудіо"
-		case m.Document != nil:
-			return "📄 Файл"
+		case "document":
+			return "📄 Документ"
+		case "animation":
+			return "🎞 GIF"
+		case "sticker":
+			return "💟 Стікер"
 		default:
 			return "Без тексту"
 		}
+
 	case "EN":
-		switch {
-		case m.Photo != nil:
+		switch mediaType {
+		case "photo":
 			return "🖼 Photo"
-		case m.Video != nil:
+		case "video":
 			return "🎥 Video"
-		case m.VideoNote != nil:
+		case "video_note":
 			return "📹 Video note"
-		case m.Voice != nil:
+		case "voice":
 			return "🎙 Voice message"
-		case m.Audio != nil:
+		case "audio":
 			return "🎵 Audio"
-		case m.Document != nil:
-			return "📄 File"
+		case "document":
+			return "📄 Document"
+		case "animation":
+			return "🎞 GIF"
+		case "sticker":
+			return "💟 Sticker"
 		default:
 			return "No text"
 		}
-	default:
-		switch {
-		case m.Photo != nil:
+
+	default: // RU
+		switch mediaType {
+		case "photo":
 			return "🖼 Фото"
-		case m.Video != nil:
+		case "video":
 			return "🎥 Видео"
-		case m.VideoNote != nil:
-			return "📹 Кружочек"
-		case m.Voice != nil:
+		case "video_note":
+			return "📹 Видеосообщение"
+		case "voice":
 			return "🎙 Голосовое"
-		case m.Audio != nil:
+		case "audio":
 			return "🎵 Аудио"
-		case m.Document != nil:
-			return "📄 Файл"
+		case "document":
+			return "📄 Документ"
+		case "animation":
+			return "🎞 GIF"
+		case "sticker":
+			return "💟 Стикер"
 		default:
 			return "Без текста"
 		}
 	}
 }
-
 func normLang(lang string) string {
 	lang = strings.ToUpper(strings.TrimSpace(lang))
 	switch lang {
@@ -175,18 +191,36 @@ func extractMediaInfo(m *telego.Message) (string, string) {
 	case len(m.Photo) > 0:
 		p := m.Photo[len(m.Photo)-1]
 		return "photo", p.FileID
+
 	case m.Video != nil:
 		return "video", m.Video.FileID
-	case m.Document != nil:
-		return "document", m.Document.FileID
-	case m.Voice != nil:
-		return "voice", m.Voice.FileID
+
 	case m.VideoNote != nil:
 		return "video_note", m.VideoNote.FileID
+
+	case m.Voice != nil:
+		return "voice", m.Voice.FileID
+
 	case m.Audio != nil:
 		return "audio", m.Audio.FileID
+
 	case m.Animation != nil:
 		return "animation", m.Animation.FileID
+
+	case m.Sticker != nil:
+		return "sticker", m.Sticker.FileID
+
+	case m.Document != nil:
+		// Telegram часто присылает GIF как document
+		mime := strings.ToLower(strings.TrimSpace(m.Document.MimeType))
+
+		switch mime {
+		case "image/gif", "video/mp4", "video/webm":
+			return "animation", m.Document.FileID
+		default:
+			return "document", m.Document.FileID
+		}
+
 	default:
 		return "", ""
 	}

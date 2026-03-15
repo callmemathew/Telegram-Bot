@@ -24,7 +24,6 @@ func (s *SupportService) OnUserMessage(ctx context.Context, m *telego.Message) e
 	}
 	user := m.From
 
-	// lang must be selected
 	lang, ok, err := s.store.GetLangByUserID(ctx, user.ID)
 	if err != nil {
 		return err
@@ -34,15 +33,14 @@ func (s *SupportService) OnUserMessage(ctx context.Context, m *telego.Message) e
 	}
 	lang = normLang(lang)
 
-	// ensure user row
-	_ = s.EnsureUser(ctx, user, m.Chat.ID)
+	if err := s.EnsureUser(ctx, user, m.Chat.ID); err != nil {
+		return err
+	}
 
-	// НЕ пересылаем команды менеджерам
 	if strings.HasPrefix(strings.TrimSpace(m.Text), "/") {
 		return nil
 	}
 
-	// ensure thread (topic)
 	threadID, hasThread, err := s.store.GetThreadByUserID(ctx, user.ID)
 	if err != nil {
 		return err
@@ -63,7 +61,6 @@ func (s *SupportService) OnUserMessage(ctx context.Context, m *telego.Message) e
 		}
 	}
 
-	// get fresh user with thread_id and upsert pinned card
 	u, err := s.store.GetUserByUserID(ctx, user.ID)
 	if err == nil {
 		if err := s.UpsertPinnedCard(ctx, u, lang, "—"); err != nil {
@@ -102,14 +99,15 @@ func (s *SupportService) OnUserMessage(ctx context.Context, m *telego.Message) e
 
 	// ===== MEDIA =====
 	label := attachmentText(lang, m)
-	if cap := strings.TrimSpace(m.Caption); cap != "" {
-		label = cap
-	}
 
 	head := fmt.Sprintf("👤 %s | %s %s\n💬 %s", topicTitle(user), langEmoji(lang), lang, label)
 	hmsg := telegoutil.Message(telegoutil.ID(s.managersChatID), head)
 	hmsg.MessageThreadID = threadID
-	_, _ = s.bot.SendMessage(ctx, hmsg)
+
+	_, err = s.bot.SendMessage(ctx, hmsg)
+	if err != nil {
+		return err
+	}
 
 	_, err = s.bot.CopyMessage(ctx, &telego.CopyMessageParams{
 		ChatID:          telegoutil.ID(s.managersChatID),
@@ -120,6 +118,8 @@ func (s *SupportService) OnUserMessage(ctx context.Context, m *telego.Message) e
 	if err != nil {
 		return err
 	}
+
+	mediaType, fileID = extractMediaInfo(m)
 
 	_ = s.store.SaveMessage(ctx, storage.Message{
 		TelegramUserID: user.ID,
