@@ -3,22 +3,24 @@ package main
 import (
 	"context"
 	"log"
-	"os"
-	"os/signal"
-	"syscall"
+
+	"github.com/joho/godotenv"
 
 	"tg-bot/internal/config"
 	"tg-bot/internal/config/app"
 )
 
 func main() {
+	if err := godotenv.Load(); err != nil {
+		log.Println(".env not loaded:", err)
+	}
+
+	ctx := context.Background()
+
 	cfg := config.MustLoad()
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
+	log.Println("Bot started")
 
 	a := app.MustNew(ctx, cfg)
-
-	log.Println("Bot started")
 	a.Run(ctx)
 }

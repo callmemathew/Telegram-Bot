@@ -40,30 +40,34 @@ func (h *Handlers) handleCallback(ctx context.Context, cb *telego.CallbackQuery)
 	}
 
 	userID := cb.From.ID
-	chatID := cb.From.ID
 
-	// ensure
+	var chatID int64
+	if cb.Message != nil {
+		chatID = cb.Message.GetChat().ID
+	} else {
+		chatID = cb.From.ID
+	}
+
 	if err := h.support.EnsureUser(ctx, &cb.From, chatID); err != nil {
 		log.Println("EnsureUser error:", err)
 		return
 	}
 
-	// ✅ ВАЖНО: узнаём, был ли язык ДО сохранения (чтобы хинт слать только новым)
 	_, hadLang, _ := h.support.GetLang(ctx, userID)
 	firstTime := !hadLang
 
-	// save lang
 	if err := h.support.SetLang(ctx, userID, lang); err != nil {
 		log.Println("SetLang error:", err)
 		return
 	}
 
-	// редактируем ТО ЖЕ сообщение с меню -> "saved" + убрать кнопки
 	if cb.Message != nil {
-		emptyKB := &telego.InlineKeyboardMarkup{InlineKeyboard: [][]telego.InlineKeyboardButton{}}
+		emptyKB := &telego.InlineKeyboardMarkup{
+			InlineKeyboard: [][]telego.InlineKeyboardButton{},
+		}
 
 		_, err := h.bot.EditMessageText(ctx, &telego.EditMessageTextParams{
-			ChatID:      telegoutil.ID(chatID),
+			ChatID:      telegoutil.ID(cb.Message.GetChat().ID),
 			MessageID:   cb.Message.GetMessageID(),
 			Text:        langSavedText(lang),
 			ReplyMarkup: emptyKB,
@@ -73,12 +77,10 @@ func (h *Handlers) handleCallback(ctx context.Context, cb *telego.CallbackQuery)
 		}
 	}
 
-	// ✅ ХИНТ ТОЛЬКО 1 РАЗ: сразу после первого выбора языка
 	if firstTime {
 		h.sendText(ctx, chatID, startHintText(lang))
 	}
 
-	_ = h.support.RefreshLangUI(ctx, userID)
 	if err := h.support.RefreshLangUI(ctx, userID); err != nil {
 		log.Println("RefreshLangUI error:", err)
 	}
