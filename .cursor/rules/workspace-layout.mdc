@@ -1,0 +1,86 @@
+---
+description: Doc_Bot repository layout, layer boundaries, and where to add files
+alwaysApply: true
+---
+
+# Doc_Bot Workspace Layout
+
+Telegram live-support bot (Go). **No frontend, no REST API, no migration tool** — webhook + SQLite only.
+
+> **Note:** README lists `internal/app`, `internal/handlers`, etc. The **actual** tree is under `internal/config/`. Follow the real paths below, not the README.
+
+## Top-level
+
+| Path | Role |
+|------|------|
+| `cmd/bot/main.go` | Entry point: load `.env`, `config.MustLoad()`, `app.MustNew()`, `Run()` |
+| `internal/config/` | All application code (config, wiring, handlers, service, storage) |
+| `go.mod` / `go.sum` | Module `tg-bot`, Go 1.25+ |
+| `.env.example` | Required env vars template |
+| `README.md` | Product docs (architecture section is outdated) |
+| `LICENSE` | MIT |
+
+## `internal/config/` layers
+
+```
+internal/config/
+├── config.go          # Env → Config struct (MustLoad)
+├── app/app.go         # Wire bot + DB + service + handlers; webhook HTTP server
+├── handlers/          # Telegram update routing (no business logic)
+├── service/           # SupportService — forum topics, forwarding, UI cards
+└── storage/           # SQLiteStore — schema init + SQL queries
+```
+
+### Handlers (`internal/config/handlers/`)
+
+- `handlers.go` — `HandleUpdate`: callback vs message; manager forum vs private user
+- `user.go` — `/start`, `/lang`, private messages → service
+- `callback.go` — inline buttons (`lang:RU|UA|EN`)
+- `texts.go` — user-facing copy + `sendText` / `sendLangMenu` helpers
+
+### Service (`internal/config/service/`)
+
+- `service.go` — `SupportService` struct + constructor
+- `flow_user.go` / `flow_manager.go` — USER→managers and MANAGER→user message flows
+- `user.go`, `pinned_card.go`, `ui_lang.go`, `lang_menu.go`, `start_hint.go` — focused features
+- `helpers.go` — lang normalization, media extraction, Telegram error helpers
+
+### Storage (`internal/config/storage/`)
+
+- `store.go` — `OpenSQLite`, `Init()` (creates `users` table)
+- `models.go` — `User` struct only
+- `users.go` — user/profile/thread/pinned/status queries
+- `messages.go` — `messages` table schema + `SaveMessage` / `ListMessagesByUser`
+
+## Where things live
+
+| Concern | Location |
+|---------|----------|
+| Backend | Entire repo (`cmd/` + `internal/config/`) |
+| Frontend | **None** |
+| Database | SQLite file at `DB_PATH`; schema in `storage/store.go` + `storage/messages.go` |
+| Config / secrets | `.env` (local), `internal/config/config.go`, `.env.example` |
+| Tests | **None yet** — add `*_test.go` next to the package under test |
+
+## Where to add new files
+
+| Change | Put it here |
+|--------|-------------|
+| New bot command or callback | `handlers/` (+ wire in existing router) |
+| New support flow / Telegram logic | `service/` (new file or extend `flow_*.go`) |
+| New table or query | `storage/` (`models.go` for structs, dedicated `*.go` per table) |
+| New env variable | `config.go`, `.env.example`, README if user-facing |
+| New startup wiring | `app/app.go` |
+| Tests | Same package, `foo_test.go` |
+
+Keep **one concern per file** (existing pattern: `flow_user.go`, `pinned_card.go`, etc.).
+
+## Do not touch without asking
+
+- **`.env`** — contains `BOT_TOKEN` and secrets
+- **`*.db`** (e.g. `docdata_bot.db`, `support.db`) — local runtime data
+- **`cmd/bot/bot`** — compiled binary; rebuild with `go build`, do not edit
+- **`.DS_Store`** — macOS metadata
+- **Restructuring `internal/config/` → `internal/handlers`** to match README — large breaking refactor
+- **Switching webhook ↔ long polling** — deployment-critical
+- **Schema changes on live DBs** — no migration framework; coordinate manual/backfill steps

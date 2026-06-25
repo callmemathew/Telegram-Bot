@@ -1,0 +1,108 @@
+---
+description: Doc_Bot coding standards, architecture, and workflow for Cursor
+alwaysApply: true
+---
+
+# Doc_Bot Project Rules
+
+## Tech stack
+
+- **Go 1.25+**, module `tg-bot`
+- **Telegram:** [telego](https://github.com/mymmrac/telego) + `telegoutil`
+- **Config:** [godotenv](https://github.com/joho/godotenv) + `internal/config/config.go`
+- **DB:** SQLite via `database/sql` + `modernc.org/sqlite`
+- **Runtime:** Webhook mode only (`WEBHOOK_URL`, `WEBHOOK_PATH`, `PORT` required)
+
+Required env: `BOT_TOKEN`, `DB_PATH`, `MANAGERS_CHAT_ID`, `WEBHOOK_URL`.
+
+## Architecture (strict layers)
+
+```
+Telegram update → handlers → service (SupportService) → storage (SQLiteStore) → SQLite
+                      ↓
+                 telego Bot API (send/edit/copy/pin)
+```
+
+1. **handlers** — route updates, parse commands/callbacks, send simple replies. **No DB access, no forum/topic logic.**
+2. **service** — all business logic; owns `*telego.Bot` and `*storage.SQLiteStore`.
+3. **storage** — SQL only; no Telegram imports.
+4. **app** — construct dependencies, register webhook, dispatch `HandleUpdate`.
+5. **config** — load env; use `MustLoad()` for fatal missing vars.
+
+Do not skip layers (e.g. handlers calling `store` directly).
+
+## Coding style
+
+- Standard Go formatting; run `go fmt ./...` before finishing.
+- Pass `context.Context` as first param on I/O paths.
+- Startup fatals: `MustLoad`, `MustNew`, missing `WEBHOOK_URL` → `log.Fatal`.
+- Package-level file header comments (Russian OK) describing the file's role — match existing files.
+- Prefer early returns and small functions over deep nesting.
+- User-visible strings: trilingual **RU / UA / EN** via `switch normLang(lang)` or dedicated `*Text(lang)` helpers.
+- Supported langs: `RU`, `UA`, `EN` (always uppercase via `normLang`).
+
+## Naming conventions
+
+| Kind | Pattern | Example |
+|------|---------|---------|
+| Service type | `SupportService` | `NewSupportService(...)` |
+| Storage type | `SQLiteStore` | methods on `(s *SQLiteStore)` |
+| Handlers | `Handlers` | `New(...)`, `HandleUpdate` |
+| Flow methods | `OnUserMessage`, `OnManagerReply` | in `flow_*.go` |
+| Callback data | `prefix:VALUE` | `lang:RU` |
+| DB columns | snake_case | `telegram_user_id`, `thread_id` |
+| Go fields | PascalCase | `TelegramUserID`, `ThreadID` |
+
+Import path prefix: `tg-bot/internal/config/...`.
+
+## Storage / database
+
+- **No migration tool.** Schema lives in `storage/store.go` (`Init`) and `storage/messages.go` (`InitMessages`).
+- New tables: add `CREATE TABLE IF NOT EXISTS` in `Init` (or sub-`Init*`), model in `models.go`, queries in a dedicated file.
+- Use `sql.NullString` / `sql.NullInt64` for nullable columns; helper `nullStringOrNil` for writes.
+- Nullable lookups: return `(value, found bool, err error)`.
+- Use `?` placeholders (SQLite); always `ExecContext` / `QueryRowContext` with `ctx`.
+- **Do not** drop or rename columns without a documented upgrade path for existing `.db` files.
+
+## Validation & error handling
+
+- **Config:** fail fast at startup (`log.Fatal` / `log.Fatalf`).
+- **Service:** return `error` to caller; use `fmt.Errorf("Op: %w", err)` when wrapping.
+- **Handlers:** `log.Println("Op error:", err)`; show short user message only when appropriate (see `user.go`).
+- **Storage:** validate inputs (e.g. empty lang → `errors.New`); distinguish `sql.ErrNoRows` from real errors.
+- **Telegram quirks:** use `isMessageNotModified`, `isUneditableMessage`, `isTopicNotModified` before treating edit failures as fatal.
+- Non-critical persistence (e.g. `SaveMessage` after send): `_ = s.store.SaveMessage(...)` is acceptable when send already succeeded.
+
+## Telegram-specific rules
+
+- Managers chat: `cfg.ManagersChatID`; ignore messages with `MessageThreadID == 0` (General topic).
+- User chat: only `ChatTypePrivate`.
+- Forum topic per user: created in `OnUserMessage` via `CreateForumTopic`; title uses `topicTitle` + lang emoji.
+- Media: use `extractMediaInfo` + `CopyMessage`; text-only uses formatted `SendMessage`.
+- Pin card: `UpsertPinnedCard` in manager thread; respect existing `pinned_msg_id`.
+
+## Testing
+
+- **No tests in repo yet.** When adding:
+  - Place `*_test.go` beside the code under test.
+  - Prefer table-driven tests for `helpers.go` / storage with `:memory:` SQLite.
+  - Mock telego at service boundary or test handlers with a fake service — avoid live Telegram calls in CI.
+  - Run `go test ./...`.
+
+## Git & commits
+
+- Branch names: `feature/...`, `fix/...`, `table/...` (existing convention).
+- Commit messages: short imperative; prefixes `fix:`, `add`, `feature/...` seen in history.
+- **Do not commit:** `.env`, `*.db`, binaries (`cmd/bot/bot`), `.DS_Store`.
+- Do not commit unless explicitly asked.
+
+## What to avoid
+
+- Adding HTTP REST endpoints without explicit request (webhook mux is Telegram-only).
+- Business logic or SQL in `handlers/` or `app/`.
+- Telegram API calls from `storage/`.
+- Introducing ORMs, codegen, or a migration framework without discussion.
+- Polling mode while production expects webhooks.
+- Duplicating user-facing text — centralize in `handlers/texts.go` or service `*Text()` helpers.
+- Large refactors (rename `internal/config` package, rewrite README architecture) in unrelated tasks.
+- New dependencies without clear need (stdlib + telego + sqlite + godotenv is the current set).
